@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -121,11 +121,11 @@ func TestScanner_Results(t *testing.T) {
 
 			// Test asserts
 			assertEqual(t, result.Status, tt.expectedResults.Status, fmt.Sprintf("Scan not completed for %s", tt.name))
-			assertEqual(t, result.Data[0].Issues.IsCompliantToMozillaConfig,
+			assertEqual(t, result.Data[0].Settings.IsCompliantToMozillaConfig,
 				tt.expectedResults.IsCompliant, fmt.Sprintf("Wrong results for Mozilla's compliance check for %s", tt.name))
 			assertEqual(t, result.Data[0].Issues.Heartbleed,
 				tt.expectedResults.VulnHeartBleed, fmt.Sprintf("Wrong results for Heartbleed check for %s", tt.name))
-			assertEqual(t, len(result.Data[0].EllipticCurves.SupportedCurves),
+			assertEqual(t, len(result.Data[0].Curves.SupportedCurves),
 				tt.expectedResults.NumSupportedEC, fmt.Sprintf("Wrong results for the number of supported elliptic curves for %s", tt.name))
 		})
 	}

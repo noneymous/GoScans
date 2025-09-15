@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2023.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -24,8 +24,6 @@ import (
 // pointer to a populated Ad struct.
 // ATTENTION: Make sure searchCn / ldapAddress are sanitized if taken from user input, to avoid SQL injection attacks!
 func AdodbQuery(logger utils.Logger, searchCn string, searchDomain string) *Ad {
-
-	logger.Debugf("Searching ADODB with implicit authentication for '%s'.", searchCn)
 
 	// Prepare ADODB connection
 	adDb, errOpen := sql.Open("adodb", `Provider=ADSDSOObject`)
@@ -98,7 +96,7 @@ func adodbExpand(logger utils.Logger, adDb *sql.DB, result *Ad) {
 		FROM 'LDAP://` + newLdapAddress + `/` + newBaseDn + `' 
 		WHERE objectCategory = 'User' AND cn = '` + newSearchCn + `'`)
 	if errUserSearch != nil {
-		logger.Warningf("ADODB search for user '%s' in '%s' failed: %s", newSearchCn, newLdapAddress, errUserSearch)
+		logger.Debugf("ADODB search for user '%s' in '%s' failed: %s", newSearchCn, newLdapAddress, errUserSearch)
 		return
 	}
 

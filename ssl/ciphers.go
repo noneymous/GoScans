@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -584,8 +584,8 @@ var cipherInfos = []CipherInfo{
 	// Not so sure whether Streeborg is used as PRF or simple Mac - didn't find an answer to that.
 	{"0xFF87", "GOST2012256-NULL-STREEBOG256", "", KEX_GOSTR341001, AUTH_GOSTR341001, ENC_NONE, 0, ENC_M_NONE, MAC_STREEBOG256, PRF_NONE, false},
 
-	// The following cipher suites don't have an OpenSSL name and therefore won't be found by SSLyze. Therefore we'd
-	// don't have to bother loading the information about them everytime. Nonetheless I included them for future
+	// The following cipher suites don't have an OpenSSL name and therefore won't be found by SSLyze. Therefore, we
+	// don't have to bother loading the information about them everytime. Nonetheless, I included them for future
 	// reference.
 	/*
 		{"0x16B7", "", "TLS_CECPQ1_RSA_WITH_CHACHA20_POLY1305_SHA256", KEX_CECPQ1, AUTH_RSA, ENC_CHACHA20, 256, ENC_M_POLY1305, MAC_AEAD, PRF_SHA256, false},

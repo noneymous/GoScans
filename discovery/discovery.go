@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2023.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,12 +12,14 @@ package discovery
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"github.com/Ullaakut/nmap/v3"
 	"github.com/siemens/GoScans/discovery/active_directory"
 	"github.com/siemens/GoScans/discovery/netapi"
 	"github.com/siemens/GoScans/utils"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -139,10 +141,11 @@ type Result struct {
 }
 
 type ldapConf struct {
-	ldapServer   string // (Optional) Active Directory server to query host details
-	ldapDomain   string // (Optional) Active Directory access credentials
-	ldapUser     string // ...
-	ldapPassword string // ...
+	ldapServer    string // (Optional) Active Directory server to query host details
+	ldapDomain    string // (Optional) Active Directory access credentials (Domain only required and used as realm for GSSAPI authentication (Kerberos))
+	ldapUser      string // (Optional) Active Directory access credentials
+	ldapPassword  string // (Optional) Active Directory access credentials
+	disableGssapi bool   // Flag to disable GssApi
 }
 
 type Scanner struct {
@@ -151,7 +154,7 @@ type Scanner struct {
 	Finished          time.Time
 	logger            utils.Logger  // Can be any logger implementing our minimalistic interface. Wrap your logger to satisfy the interface, if necessary (like utils.LoggerTest).
 	targetDescription string        // Target to be scanned by Nmap (might be IPv4, IPv6, Hostname or range)
-	domainOrder       []string      // List of potential (sub) domains, ordered by plausibility. This is used to chose the most likely discovered DNS name. E.g. allows to select domain.internal over domain.com.
+	domainOrder       []string      // List of potential (sub) domains, ordered by plausibility. This is used to choose the most likely discovered DNS name. E.g. allows to select domain.internal over domain.com.
 	nmapPath          string        // Path to the Nmap executable
 	nmapParameters    []string      // List of Nmap scan arguments
 	nmapVersionAll    bool          // Toggle to enable/disable extensive version detection
@@ -160,8 +163,10 @@ type Scanner struct {
 	excludeDomains    []string      // Domains to be ignored when discovered
 	dialTimeout       time.Duration // The duration a dial is allowed to take before it will be canceled.
 
-	proc           *nmap.Scanner     // Actual Nmap scanner object to be executed
-	inputHostnames map[string]string // Map of original input hostnames
+	proc          *nmap.Scanner      // Actual Nmap scanner object to be executed
+	procInputs    map[string]string  // Map of original input hostnames
+	procCtx       context.Context    // Context for managing scan lifecycle and cancellation
+	procCtxCancel context.CancelFunc // Function to cancel scan context
 }
 
 func NewScanner(
@@ -173,16 +178,17 @@ func NewScanner(
 	nmapBlacklist []string, // Single blacklist targets
 	nmapBlacklistFile string, // File with list of blacklist targets. Can be combined with nmapBlacklist
 	domainOrder []string, // (Sub) domains ordered by plausibility
-	ldapServer string,
-	ldapDomain string,
-	ldapUser string,
-	ldapPassword string,
+	ldapServer string, // Only required if you want to connect to a static LDAP server for looking up additional AD data
+	ldapDomain string, // Only required and used as realm for GSSAPI authentication (Kerberos)
+	ldapUser string, // Implicit authentication will be used on domain-joined Windows machines. Otherwise, explicit authentication is required. No AD lookups will be done if neither is possible.
+	ldapPassword string, // Implicit authentication will be used on domain-joined Windows machines. Otherwise, explicit authentication is required. No AD lookups will be done if neither is possible.
+	disableGssapi bool, // Allows to disable GSSAPI and fall back to standard credentials authentication
 	excludeDomains []string, // Domains to be ignored when discovered
 	dialTimeout time.Duration, // Timeout for e.g. AD queries to enrich data (used AD fqdn might not exist)
 ) (*Scanner, error) {
 
 	// Prepare map of original input hostnames referenced by IP for later lookup
-	inputHostnames := make(map[string]string, len(targets))
+	targetsOriginal := make(map[string]string, len(targets))
 
 	// Check whether input target is valid
 	for _, target := range targets {
@@ -194,7 +200,7 @@ func NewScanner(
 		if utils.IsValidHostname(target) {
 			if ips, err := net.LookupIP(target); err == nil {
 				for _, ip := range ips {
-					inputHostnames[ip.String()] = target
+					targetsOriginal[ip.String()] = target
 				}
 			}
 		}
@@ -202,9 +208,8 @@ func NewScanner(
 
 	// Check whether LDAP server is plausible
 	ldapServer = strings.ToLower(ldapServer)
-	if !(ldapServer == "" ||
-		strings.HasPrefix(ldapServer, "http://") ||
-		strings.HasPrefix(ldapServer, "https://")) {
+	if strings.HasPrefix(ldapServer, "http://") ||
+		strings.HasPrefix(ldapServer, "https://") {
 		return nil, fmt.Errorf("invalid LDAP server '%s'", ldapServer)
 	}
 
@@ -247,16 +252,20 @@ func NewScanner(
 		options = append(options, nmap.WithVersionAll())
 	}
 	if len(nmapBlacklist) > 0 {
-		options = append(options, nmap.WithTargetExclusion(strings.Join(nmapBlacklist, ",")))
+		options = append(options, nmap.WithTargetExclusions(nmapBlacklist...))
 	}
 	if len(nmapBlacklistFile) != 0 {
 		options = append(options, nmap.WithTargetExclusionInput(nmapBlacklistFile))
 	}
 	options = append(options, nmap.WithTargets(targets...))
 
+	// Prepare scan context with cancel function (useful for Dry Runs)
+	ctx, ctxCancel := context.WithCancel(context.Background())
+
 	// Prepare Nmap scan to receive direct feedback in case of errors
-	proc, errNew := nmap.NewScanner(context.Background(), options...)
+	proc, errNew := nmap.NewScanner(ctx, options...)
 	if errNew != nil {
+		ctxCancel()
 		return nil, errNew
 	}
 
@@ -277,11 +286,14 @@ func NewScanner(
 			ldapDomain,
 			ldapUser,
 			ldapPassword,
+			disableGssapi,
 		},
 		excludeDomains,
 		dialTimeout,
 		proc,
-		inputHostnames,
+		targetsOriginal,
+		ctx,
+		ctxCancel,
 	}
 
 	// Return scan struct
@@ -290,7 +302,9 @@ func NewScanner(
 
 // Run starts scan execution. This must either be executed as a goroutine, or another thread must be active listening
 // on the scan's result channel, in order to avoid a deadlock situation.
-func (s *Scanner) Run() (res *Result) {
+// The timeout argument is optional and allows cancelling the scan after a given duration.
+// This timeout is intended for dry runs only. For actual scan timeouts, use appropriate Nmap arguments instead.
+func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 
 	// Recover potential panics to gracefully shut down scan
 	defer func() {
@@ -311,9 +325,24 @@ func (s *Scanner) Run() (res *Result) {
 		}
 	}()
 
+	// Clean up process context if it hasn't timed out before process completion
+	defer s.procCtxCancel()
+
 	// Set scan started flag and calculate deadline
 	s.Started = time.Now()
 	s.logger.Infof("Started  scan of %s.", s.targetDescription)
+
+	// Optionally cancel via timeout
+	if timeout > 0 {
+		go func() {
+			select {
+			case <-s.procCtx.Done():
+				// Quit goroutine
+			case <-time.After(timeout):
+				s.procCtxCancel() // Cancel proc context and quit goroutine
+			}
+		}()
+	}
 
 	// Execute scan logic
 	res = s.execute()
@@ -382,9 +411,6 @@ func (s *Scanner) execute() *Result {
 	// Check for nmap errors
 	if errRun != nil {
 
-		// Race condition, give signal a chance to arrive via interrupt channel
-		time.Sleep(time.Millisecond * 500)
-
 		// Check if nmap terminated with error due to interrupt or by itself
 		select {
 		case <-interrupt:
@@ -395,6 +421,17 @@ func (s *Scanner) execute() *Result {
 				false,
 			}
 		default:
+
+			// Handle interrupts (sigint, ctrl+c) that might have slipped through due to a race condition
+			// via interrupt channel
+			if errors.Is(errRun, nmap.ErrScanInterrupt) {
+				s.logger.Infof("Nmap aborted due to interrupt.")
+				return &Result{
+					nil,
+					utils.StatusFailed,
+					false,
+				}
+			}
 
 			// Handle scan timeout error, which should not happen in this discovery module, because no global
 			// scan timeout is specified. It's rather advised to set scan timeouts indirectly with Nmap's
@@ -542,7 +579,7 @@ func (s *Scanner) execute() *Result {
 		// Add original discovery input hostname if Nmap hasn't discovered it. Nmap first resolves input
 		// hostnames to IP addresses and proceeds ignoring the original input hostname. It might not be able to
 		// rediscover it throughout the scan.
-		originalHostname, _ := s.inputHostnames[ip]
+		originalHostname, _ := s.procInputs[ip]
 		if len(originalHostname) != 0 && !utils.StrContained(originalHostname, hostnames) {
 			hostnames = append(hostnames, originalHostname)
 		}
@@ -1063,9 +1100,16 @@ func hostExtractSans(
 		if err != nil {
 			// Don't warn on connection issues, but warn on unexpected errors during SANs extraction
 			var errNet net.Error
+			var errRecord tls.RecordHeaderError
 			if errors.As(err, &errNet) { // Check if error is connection related (timeout errors count as connection related as well)
 				logger.Debugf(
 					"Post-processing '%s': Could not connect on port %d for subject alternative names extraction: %s", ip, port, err)
+			} else if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) { // Connection closed by other side
+				logger.Debugf(
+					"Post-processing '%s': Could not establish SSL connection on port %d for subject alternative names extraction: %s", ip, port, err)
+			} else if errors.As(err, &errRecord) {
+				logger.Debugf(
+					"Post-processing '%s': Could not execute SSL handshake on port %d for subject alternative names extraction: %s", ip, port, err)
 			} else { // Otherwise log warning message with details
 				logger.Warningf(
 					"Post-processing '%s': Could not extract subject alternative names on port %d: %s", ip, port, err)
@@ -1133,18 +1177,22 @@ func hostLookupAd(
 		if ldapConf.ldapUser != "" {
 
 			// Query LDAP with explicit authentication (independent of OS)
+			logger.Debugf("Searching LDAP with explicit authentication for '%s'.", host)
 			hData.Ad = active_directory.LdapQuery(
 				logger,
 				host,
 				ldapAddress,
 				389,
+				ldapConf.ldapDomain,
 				ldapConf.ldapUser,
 				ldapConf.ldapPassword,
+				ldapConf.disableGssapi,
 				dialTimeout,
 			)
 		} else {
 
 			// Query ADODB with implicit authentication (only working on Windows with suitable domain membership)
+			logger.Debugf("Searching ADODB with implicit authentication for '%s'.", host)
 			hData.Ad = active_directory.AdodbQuery(logger, host, ldapAddress)
 		}
 	}

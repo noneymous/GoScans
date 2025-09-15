@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,9 +12,49 @@ package ssl
 
 import (
 	"fmt"
+	gosslyze "github.com/noneymous/GoSslyze"
 )
 
-func setCipherIssues(sslData *Data) error {
+// parseIssues creates and returns an issues struct with information on possible vulnerabilities.
+func parseIssues(cr *gosslyze.CommandResults) (*Issues, error) {
+
+	// Initialize the return structure.
+	issues := &Issues{}
+
+	// Check for nil pointer exceptions.
+	if cr == nil {
+		return issues, fmt.Errorf("provided SSLyze result is nil")
+	}
+
+	// General information
+	if cr.EarlyData != nil && cr.EarlyData.Result != nil {
+		issues.EarlyDataSupported = cr.EarlyData.Result.IsSupported
+	}
+
+	// Renegotiation information
+	if cr.Renegotiation != nil && cr.Renegotiation.Result != nil {
+		issues.ClientRenegotiationDos = cr.Renegotiation.Result.VulnerableToClientRenegotiation
+	}
+
+	// Vulnerability information
+	if cr.Heartbleed != nil && cr.Heartbleed.Result != nil {
+		issues.Heartbleed = cr.Heartbleed.Result.IsVulnerable
+	}
+	if cr.OpensslCcs != nil && cr.OpensslCcs.Result != nil {
+		issues.CcsInjection = cr.OpensslCcs.Result.IsVulnerable
+	}
+	if cr.Compression != nil && cr.Compression.Result != nil {
+		issues.Crime = cr.Compression.Result.IsSupported
+	}
+	if cr.Robot != nil && cr.Robot.Result != nil {
+		issues.Robot = robotResultToBool(cr.Robot.Result.IsVulnerable)
+	}
+
+	// Return issues
+	return issues, nil
+}
+
+func parseIssuesCiphers(sslData *Data) error {
 
 	// Check for nil pointer exceptions.
 	if sslData == nil {
@@ -52,6 +92,16 @@ func setCipherIssues(sslData *Data) error {
 			if cipher.BlockCipher {
 				sslData.Issues.Poodle = true
 			}
+		}
+
+		// Is there a cipher suite with TLS 1.0 enabled?
+		if cipher.Protocol == Tlsv1_0 {
+			sslData.Issues.Tlsv1_0Enabled = true
+		}
+
+		// Is there a cipher suite with TLS 1.1 enabled?
+		if cipher.Protocol == Tlsv1_1 {
+			sslData.Issues.Tlsv1_1Enabled = true
 		}
 
 		// Is there a cipher suite with RC4 enabled?
@@ -125,12 +175,25 @@ func setCipherIssues(sslData *Data) error {
 		}
 	}
 
+	// Return nil as everything went fine
 	return nil
 }
 
-// setMinStrength set the corresponding field in BasicData to the lowest value of key exchange, encryption, mac or the
-// certificates public key. If a strength is not set a default 0 will be returned.
-func setMinStrength(sslData *Data) error {
+// robotResultToBool Helper function to convert ROBOT result string to boolean: see https://nabla-c0d3.github.io/sslyze/documentation/available-scan-commands.html#robot
+func robotResultToBool(output string) bool {
+	switch output {
+	case "VULNERABLE_WEAK_ORACLE", "VULNERABLE_STRONG_ORACLE":
+		return true
+	case "NOT_VULNERABLE_NO_ORACLE", "NOT_VULNERABLE_RSA_NOT_SUPPORTED", "UNKNOWN_INCONSISTENT_RESULTS":
+		return false
+	default:
+		return false // For any unknown value, consider it as not vulnerable
+	}
+}
+
+// parseMinStrength set the corresponding field in BasicData to the lowest value of key exchange, encryption,
+// mac or the certificates public key. If a strength is not set a default 0 will be returned.
+func parseMinStrength(sslData *Data) error {
 
 	// Check for nil pointer exceptions.
 	if sslData == nil {
@@ -139,7 +202,7 @@ func setMinStrength(sslData *Data) error {
 
 	minCertStrength := 0
 	// Find the minimum strength in the certificate chain.
-	for _, deployment := range sslData.CertDeployments {
+	for _, deployment := range sslData.Chains {
 		for _, cert := range deployment.Certificates {
 			// Simply set the first valid value
 			if minCertStrength == 0 {
@@ -179,6 +242,7 @@ func setMinStrength(sslData *Data) error {
 				minMacStrength = cipher.PrfStrength
 			}
 
+			// Continue with next cipher
 			continue
 		}
 
@@ -203,25 +267,31 @@ func setMinStrength(sslData *Data) error {
 	}
 
 	// Determine the smallest value of encryption, mac and the certificates public key (= authentication and/or encryption)
-	min := minCertStrength
-	if minEncStrength < min {
-		min = minEncStrength
+	minStrength := minCertStrength
+	if minEncStrength < minStrength {
+		minStrength = minEncStrength
 	}
-	if minMacStrength < min {
-		min = minMacStrength
+	if minMacStrength < minStrength {
+		minStrength = minMacStrength
 	}
 
-	// The key exchange strength is only valid if it's greater than 0. Otherwise we did not get any information on it.
-	if minKexStrength > 0 && minKexStrength < min {
-		min = minKexStrength
+	// The key exchange strength is only valid if it's greater than 0. Otherwise, we did not get any information on it.
+	if minKexStrength > 0 && minKexStrength < minStrength {
+		minStrength = minKexStrength
 	}
 
 	// The same procedure as with the minKexStrength.
-	if minCertStrength > 0 && minCertStrength < min {
-		min = minCertStrength
+	if minCertStrength > 0 && minCertStrength < minStrength {
+		minStrength = minCertStrength
 	}
 
-	sslData.Issues.MinStrength = min
+	sslData.Settings.MinStrength = minStrength
 
+	// Below 128 bits is considered cryptographically weak
+	if minStrength < 128 {
+		sslData.Issues.LowEncryptionStrength = true
+	}
+
+	// Return nil as everything went fine
 	return nil
 }

@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -25,19 +25,13 @@ type Logger interface {
 	Errorf(format string, v ...interface{})
 }
 
-// TaggedLogger is a small wrapper for the Logger interface, that allows to add an additional tag before every message.
-// It should mainly be used to group information from different worker routines.
+// TaggedLogger wraps a logger and allows to add a tag before every message.
+// It should mainly be used to group information from different goroutines.
 type TaggedLogger struct {
 	Logger
 	tag string
 }
 
-func NewTaggedLogger(logger Logger, tag string) *TaggedLogger {
-	return &TaggedLogger{
-		logger,
-		tag,
-	}
-}
 func (l *TaggedLogger) Debugf(format string, v ...interface{}) {
 	l.Logger.Debugf("["+l.tag+"] "+format, v...)
 }
@@ -51,8 +45,14 @@ func (l *TaggedLogger) Errorf(format string, v ...interface{}) {
 	l.Logger.Errorf("["+l.tag+"] "+format, v...)
 }
 
-// TestLogger wraps the default golang logger and extends it with the functions required to implement the
-// Logger interface.
+func NewTaggedLogger(logger Logger, tag string) *TaggedLogger {
+	return &TaggedLogger{
+		logger,
+		tag,
+	}
+}
+
+// TestLogger wraps the default golang logger and implements the required Logger interface
 type TestLogger struct {
 	*log.Logger
 	tag string

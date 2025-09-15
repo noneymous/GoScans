@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -98,11 +98,31 @@ func (s *Scanner) crawl() *filecrawler.Result {
 		knownShares[strings.ToLower(share.Name)] = struct{}{}
 	}
 
+	// Append forced shares
+	cnt := 0
+	if len(s.forcedShares) > 0 {
+		for _, share := range s.forcedShares {
+			share = strings.ToLower(share)
+			_, ok := knownShares[share]
+			if !ok {
+				shares = append(shares, shareInfo{
+					Name:   share,
+					Target: s.target,
+					Path:   fmt.Sprintf("\\\\%s\\%s", s.target, share),
+					IsDfs:  false,
+				})
+				knownShares[share] = struct{}{}
+				cnt++
+			}
+		}
+		s.logger.Debugf("Added %d forced share(s).", cnt)
+	}
+
 	// Run as long as there are shares left to crawl
 	// ATTENTION: New shares might get detected during the process
 	for len(shares) > 0 {
 
-		// Shares we found after the the initial enumeration, e.g. shares with "noBrowseable" flag in samba
+		// Shares we found after the initial enumeration, e.g. shares with "noBrowseable" flag in samba
 		var share shareInfo
 
 		// Pop the first share in the list

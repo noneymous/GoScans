@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -43,6 +43,7 @@ type Scanner struct {
 	target                    string // Target address to be scanned (might be IPv4, IPv6 or hostname)
 	crawlDepth                int
 	threads                   int
+	forcedShares              []string            // list of shares to try, even if they couldn't be enumerated
 	excludedShares            map[string]struct{} // faster for checking if string is contained than []string
 	excludedFolders           map[string]struct{}
 	excludedExtensions        map[string]struct{}
@@ -60,6 +61,7 @@ func NewScanner(
 	target string,
 	crawlDepth int,
 	threads int,
+	forcedShares []string, // List of share names that should always be attempted, even if they could not be enumerated
 	excludedShares []string,
 	excludedFolders []string,
 	excludedExtensions []string,
@@ -100,6 +102,7 @@ func NewScanner(
 		strings.TrimSpace(target),
 		crawlDepth,
 		threads,
+		forcedShares,
 		toMap(utils.TrimToLower(excludedShares)),
 		toMap(utils.TrimToLower(excludedFolders)),
 		toMap(utils.TrimToLower(excludedExtensions)),
@@ -146,7 +149,9 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 
 	// Set scan started flag and calculate deadline
 	s.Started = time.Now()
-	s.deadline = time.Now().Add(timeout)
+	if timeout > 0 {
+		s.deadline = time.Now().Add(timeout)
+	}
 	s.logger.Infof("Started  scan of %s.", s.target)
 
 	// Execute scan logic

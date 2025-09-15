@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -167,7 +167,9 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 
 	// Set scan started flag and calculate deadline
 	s.Started = time.Now()
-	s.deadline = time.Now().Add(timeout)
+	if timeout > 0 {
+		s.deadline = time.Now().Add(timeout)
+	}
 	s.logger.Infof("Started  scan of %s.", s.target)
 
 	// Execute scan logic
@@ -494,7 +496,9 @@ func (s *Scanner) getExportsV3() (map[string][]string, error) {
 // lines together for easier processing.
 // E.g. for multiline output:
 // /vol1/export 		192.xxx.xxx.xxx, 192.xxx.xxx.xxx,
-//						192.xxx.xxx.xxx, 192.xxx.xxx.xxx
+//
+//	192.xxx.xxx.xxx, 192.xxx.xxx.xxx
+//
 // is processed to:
 // /vol1/export 192.xxx.xxx.xxx, 192.xxx.xxx.xxx, 192.xxx.xxx.xxx, 192.xxx.xxx.xxx
 func (s *Scanner) sanitizeShowmountOutput(outStr string) []string {

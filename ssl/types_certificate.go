@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -63,15 +63,15 @@ func makePublicKeyFromX509(logger utils.Logger, alg x509.PublicKeyAlgorithm) Pub
 func makePublicKey(logger utils.Logger, alg string) PublicKey {
 
 	switch alg {
-	case "_RSAPublicKey":
+	case "_RSAPublicKey", "RSAPublicKey": // Sslyze v5 / v6
 		return PUB_K_RSA
-	case "_DSAPublicKey":
+	case "_DSAPublicKey", "DSAPublicKey": // Sslyze v5 / v6
 		return PUB_K_DSA
-	case "_EllipticCurvePublicKey":
+	case "_EllipticCurvePublicKey", "EllipticCurvePublicKey", "ECPublicKey": // Sslyze v5 / v6
 		return PUB_K_ECDSA
-	case "_Ed25519PublicKey":
+	case "_Ed25519PublicKey", "Ed25519PublicKey": // Sslyze v5 / v6
 		return PUB_K_ED25519
-	case "_Ed448PublicKey":
+	case "_Ed448PublicKey", "Ed448PublicKey": // Sslyze v5 / v6
 		return PUB_K_ED448
 	case "Unexpected key algorithm":
 		// TODO, nice to have: Implement GOST detection, return appropriate public key

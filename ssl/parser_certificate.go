@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -30,23 +30,23 @@ func parseCertificateChains(
 	logger utils.Logger,
 	cr *gosslyze.CommandResults,
 	targetName string,
-) ([]*CertDeployment, bool, bool, error) {
+) ([]*Chain, bool, bool, error) {
 
 	// Check for nil pointer exceptions.
 	if cr == nil {
-		return make([]*CertDeployment, 0), false, false, fmt.Errorf("provided SSLyze result is nil")
+		return make([]*Chain, 0), false, false, fmt.Errorf("provided SSLyze result is nil")
 	}
 	if cr.CertInfo == nil {
-		return make([]*CertDeployment, 0), false, false, fmt.Errorf("provided SSLyze result has no certificate info")
+		return make([]*Chain, 0), false, false, fmt.Errorf("provided SSLyze result has no certificate info")
 	}
 
 	// Initialize the return variables.
-	deployments := make([]*CertDeployment, 0, len(cr.CertInfo.Result.Deployments))
+	deployments := make([]*Chain, 0, len(cr.CertInfo.Result.Deployments))
 	anyInvalid := false
 	anyInvalidOrder := false
 
 	for _, deployment := range cr.CertInfo.Result.Deployments {
-		deploy := &CertDeployment{
+		deploy := &Chain{
 			Certificates:  make([]*Certificate, 0, len(deployment.CertificateChain)),
 			HasValidOrder: deployment.HasValidOrder,
 			ValidatedBy:   make([]string, 0, 2),
@@ -106,7 +106,7 @@ func parseCertificate(logger utils.Logger, sslyzeCert *gosslyze.Certificate, tar
 	// Initialize our certificate.
 	certificate := Certificate{
 		Serial:                 sslyzeCert.Serial,
-		AlternativeNames:       sslyzeCert.SubjectAltName.Dns,
+		AlternativeNames:       sslyzeCert.SubjectAltName.DnsNames,
 		PublicKeyAlgorithm:     makePublicKey(logger, sslyzeCert.PublicKey.Algorithm),
 		SignatureHashAlgorithm: makeSignatureHash(logger, sslyzeCert.SignatureHashAlgo.Name),
 	}

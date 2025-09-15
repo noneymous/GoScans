@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2023.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -28,24 +28,34 @@ func LdapQuery(
 	searchCn string,
 	ldapAddress string,
 	ldapPort int,
+	ldapDomain string, // Only required and used as realm for GSSAPI authentication (Kerberos)
 	ldapUser string,
 	ldapPassword string,
+	disableGssapi bool, // Allows to disable GSSAPI and fall back to standard credentials authentication
 	dialTimeout time.Duration,
 ) *Ad {
 
-	logger.Debugf("Searching LDAP with explicit authentication for '%s'.", searchCn)
+	// Prepare memory
+	var conn *ldap.Conn
+	var errConn error
 
-	// Connect to Active Directory
-	conn, errConn := ldapConnect(logger, ldapAddress, ldapPort, ldapUser, ldapPassword, dialTimeout)
+	// Connect to LDAP with appropriate authentication method
+	if !disableGssapi {
+		conn, errConn = ldapConnectGssapi(logger, ldapAddress, ldapPort, ldapDomain, ldapUser, ldapPassword, dialTimeout) // Connect with GSSAPI
+	} else {
+		conn, errConn = ldapConnect(logger, ldapAddress, ldapPort, ldapUser, ldapPassword, dialTimeout) // Connect with standard LDAP authentication
+	}
+
+	// Check for connection errors
 	if errConn != nil {
-		logger.Debugf("LDAP connection to '%s:%d' failed: %s", ldapAddress, ldapPort, errConn)
+		logger.Debugf("Could not connect to LDAP server '%s:%d': %s", ldapAddress, ldapPort, errConn)
 		return &Ad{}
 	} else {
-		logger.Debugf("LDAP connection to '%s:%d' succeeded.", ldapAddress, ldapPort)
+		logger.Debugf("Successfully connected to LDAP server '%s:%d'.", ldapAddress, ldapPort)
 	}
 
 	// Make sure connection is closed on exit
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Convert domain name into distinguished name
 	baseDn := fqdnToDn(ldapAddress)
@@ -156,7 +166,7 @@ func LdapQuery(
 
 	// Execute user query, if managedBy is set
 	if len(managedBy) > 6 { // > 6 because there must be 'CN=' and 'DC=' at least
-		ldapExpand(logger, conn, ldapAddress, ldapPort, ldapUser, ldapPassword, dialTimeout, &result)
+		ldapExpand(logger, conn, ldapAddress, ldapPort, ldapDomain, ldapUser, ldapPassword, disableGssapi, dialTimeout, &result)
 	}
 
 	// Return filled AD struct
@@ -169,8 +179,10 @@ func ldapExpand(
 	conn *ldap.Conn,
 	ldapAddress string,
 	ldapPort int,
+	ldapDomain string, // Only required and used as realm for GSSAPI authentication (Kerberos)
 	ldapUser string,
 	ldapPassword string,
+	disableGssapi bool, // Allows to disable GSSAPI and fall back to standard credentials authentication
 	dialTimeout time.Duration,
 	result *Ad,
 ) {
@@ -184,19 +196,25 @@ func ldapExpand(
 	if newLdapAddress != ldapAddress {
 
 		// Close old LDAP connection
-		conn.Close()
+		_ = conn.Close()
 
-		// Connect to Active Directory
-		conn, errConn = ldapConnect(logger, newLdapAddress, ldapPort, ldapUser, ldapPassword, dialTimeout)
+		// Connect to LDAP with appropriate authentication method
+		if !disableGssapi {
+			conn, errConn = ldapConnectGssapi(logger, newLdapAddress, ldapPort, ldapDomain, ldapUser, ldapPassword, dialTimeout) // Connect with GSSAPI
+		} else {
+			conn, errConn = ldapConnect(logger, newLdapAddress, ldapPort, ldapUser, ldapPassword, dialTimeout) // Connect with standard LDAP authentication
+		}
+
+		// Check for connection errors
 		if errConn != nil {
-			logger.Debugf("LDAP connection to '%s:%d' failed: %s", newLdapAddress, ldapPort, errConn)
+			logger.Debugf("Could not connect to LDAP server '%s:%d': %s", newLdapAddress, ldapPort, errConn)
 			return
 		} else {
-			logger.Debugf("LDAP connection to '%s:%d' succeeded.", newLdapAddress, ldapPort)
+			logger.Debugf("Successfully connected to LDAP server '%s:%d'.", newLdapAddress, ldapPort)
 		}
 
 		// Make sure connection is closed on exit
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 	}
 
 	// Prepare search
@@ -260,23 +278,23 @@ func ldapConnect(
 		ldap.DialWithDialer(&net.Dialer{Timeout: dialTimeout}), // DialWithDialer updates net.Dialer in DialContext.
 	}
 
-	// First of try to establish an ldaps connection right away.
+	// First of try to establish an LDAPS connection right away.
 	conn, errDialS := ldap.DialURL(fmt.Sprintf("ldaps://%s:%d", baseUrl, ldapPort), opts...)
 	if errDialS != nil {
-		logger.Debugf("LDAPS connection to '%s:%d' failed: %s", ldapAddress, ldapPort, errDialS)
+		logger.Debugf("LDAPS connection failed: %s", errDialS)
 
-		// Try to establish a normal ldap connection
+		// Try to establish a normal LDAP connection
 		var errDial error
 		conn, errDial = ldap.DialURL(fmt.Sprintf("ldap://%s:%d", baseUrl, ldapPort), opts...)
 		if errDial != nil {
-			logger.Debugf("LDAP connection to '%s:%d' failed: %s", ldapAddress, ldapPort, errDial)
-			return nil, fmt.Errorf("neither LDAP nor LDAPS connection accepted")
+			logger.Debugf("LDAP connection failed: %s", errDial)
+			return nil, fmt.Errorf("neither LDAPS nor LDAP connection accepted")
 		}
 
 		// Try to upgrade to TLS
 		errTls := conn.StartTLS(utils.InsecureTlsConfigFactory()) // Insecure, because this is not a user interface, we are trying to discover content...
 		if errTls != nil {
-			logger.Debugf("StartTLS connection to '%s:%d' failed: %s", ldapAddress, ldapPort, errTls)
+			logger.Debugf("StartTLS connection failed: %s", errTls)
 		}
 	}
 
@@ -284,14 +302,14 @@ func ldapConnect(
 	if len(ldapUser) > 0 && len(ldapPassword) > 0 {
 		errBind := conn.Bind(ldapUser, ldapPassword)
 		if errBind != nil {
-			conn.Close()
+			_ = conn.Close()
 			return nil, fmt.Errorf("authenticated bind error: %s", errBind)
 		}
 	} else {
 		errAuth := conn.UnauthenticatedBind("anonymous")
 		if errAuth != nil {
-			conn.Close()
-			return nil, fmt.Errorf("bind error: %s", errAuth)
+			_ = conn.Close()
+			return nil, fmt.Errorf("anonymous bind error: %s", errAuth)
 		}
 	}
 

@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -273,11 +273,11 @@ func isDuplicate(prevResults []*Data, currResult *Data) bool {
 
 // compareResultData actually compares two results and is called by isDuplicate.
 func compareResultData(data1, data2 *Data) bool {
+
 	// Check the Data struct
 	if data1 == nil && data2 == nil {
 		return true
 	}
-
 	if data1 == nil || data2 == nil {
 		return false
 	}
@@ -288,38 +288,41 @@ func compareResultData(data1, data2 *Data) bool {
 		return false
 	}
 
+	// Compare Settings
+	if (data1.Settings == nil || data2.Settings == nil) && !(data1.Settings == nil && data2.Settings == nil) || // XOR
+		*data1.Settings != *data2.Settings {
+		return false
+	}
+
 	// Check Ciphers
 	if len(data1.Ciphers) != len(data2.Ciphers) {
 		return false
 	}
-
 	for cipherId, cipher1 := range data1.Ciphers {
 		var cipher2 *Cipher
 		ok := false
 		if cipher2, ok = data2.Ciphers[cipherId]; !ok {
 			return false
 		}
-
 		if !compareCipher(cipher1, cipher2) {
 			return false
 		}
 	}
 
 	// Compare certificates deployments
-	if (data1.CertDeployments == nil) != (data2.CertDeployments == nil) {
+	if (data1.Chains == nil) != (data2.Chains == nil) {
 		return false
 	}
-
-	if len(data1.CertDeployments) != len(data2.CertDeployments) {
+	if len(data1.Chains) != len(data2.Chains) {
 		return false
 	}
 
 	// Compare the actual deployments and their certificates. Order does not matter here
-	used := make(map[int]struct{}, len(data2.CertDeployments))
-	for _, d1 := range data1.CertDeployments {
+	used := make(map[int]struct{}, len(data2.Chains))
+	for _, d1 := range data1.Chains {
 		found := false
 
-		for i, d2 := range data2.CertDeployments {
+		for i, d2 := range data2.Chains {
 			if _, ok := used[i]; ok {
 				continue
 			}

@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,11 +12,11 @@ package ssl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/noneymous/GoSslyze"
 	"github.com/siemens/GoScans/utils"
 	"math/big"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -24,7 +24,11 @@ import (
 const Label = "Ssl"
 
 var (
-	sslyzeVersion = []int{5, 0, -1}
+	sslyzeMinVersion = utils.Version{
+		Major: 5,
+		Minor: 0,
+		Patch: 0,
+	}
 )
 
 /*
@@ -47,7 +51,7 @@ var (
  *		information when the key exchange was a DH key exchange, but removed it and it seems like it won't come back
  *		anytime soon.
  *	-> The only place to get mor information about these keys is the 'clientHello' (and 'serverHello') messages of the
- * 		TLS protocol. Therefore both solutions for this problem are quiet similar:
+ * 		TLS protocol. Therefore, both solutions for this problem are quite similar:
  * 		- add the information to the output of SSLyze										(might not be feasible as SSLyze relies on OpenSSL and OpenSSL probably does not expose this kind of information)
  * 		- implement the TLS protocol up to the clientHello and the serverHello messages.	(at this point we could probably re-implement SSLyze in Golang (^.^') )
  *
@@ -105,38 +109,15 @@ var StartTlsPorts = map[int]string{
 	5432: "postgres",    // Postgres
 }
 
-type Issues struct {
-	// ATTENTION: When changing any of the following structs, change the compareResultData function accordingly!
-	AnyChainInvalid              bool     // Indicates whether any certificate chain is invalid.
-	AnyChainInvalidOrder         bool     // Indicates whether any certificate chain has an invalid order.
-	LowestProtocol               Protocol // The lowest SSL / TLS version that is supported by the server.
-	MinStrength                  int      // The minimum of EncryptionStrength, MacStrength(/PrfStrength) and PublicKeyStrength across all ciphers and certificates.
-	InsecureRenegotiation        bool     // Indicates whether the server supports secure renegotiation.
-	AcceptsClientRenegotiation   bool     // If set renegotiation can be initialized by the client.
-	InsecureClientRenegotiation  bool     // Combination of InsecureRenegotiation and AcceptsClientRenegotiation.
-	SessionResumptionWithId      bool     // If set a session resumption using IDs is possible.
-	SessionResumptionWithTickets bool     // If set a session resumption using session tickets is possible.
-	NoPerfectForwardSecrecy      bool     // If this is set, the server supports at least one cipher suite that does not provide prefect forward secrecy.
-	Compression                  bool     // If set compression for the payload is available (leading to CRIME vulnerability).
-	ExportSuite                  bool     // Indicates whether the server supports an export cipher suite.
-	DraftSuite                   bool     // Indicates whether the server supports a draft cipher suite.
-	Sslv2Enabled                 bool     // Indicates the presence of at least one SSLv2 cipher suite.
-	Sslv3Enabled                 bool     // Indicates the presence of at least one SSLv3 cipher suite.
-	Rc4Enabled                   bool     // Indicates the presence of at least one cipher suite with RC4 encryption.
-	Md2Enabled                   bool     // Indicates the presence of at least one cipher suite with MD2 mac (/prf).
-	Md5Enabled                   bool     // Indicates the presence of at least one cipher suite with MD5 mac (/prf).
-	Sha1Enabled                  bool     // Indicates the presence of at least one cipher suite with SHA1 mac (/prf).
-	EarlyDataSupported           bool     // Early data can have a negative impact if session management is not implemented carefully.
-	CcsInjection                 bool     // 									(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0224)
-	Beast                        bool     // 									(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2011-3389)
-	Heartbleed                   bool     // http://heartbleed.com/				(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160)
-	Lucky13                      bool     // 									(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2013-0169)
-	Poodle                       bool     // 									(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-3566) (https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-8730)
-	Freak                        bool     // https://freakattack.com			(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-0204)
-	Logjam                       bool     // https://weakdh.org/logjam.html		(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-4000) (Currently only export ciphers are tested)
-	Sweet32                      bool     // https://sweet32.info/ 				(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-2183)
-	Drown                        bool     // https://drownattack.com/ 			(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-0800)
-	IsCompliantToMozillaConfig   bool     // https://ssl-config.mozilla.org/    Check if the server's SSL config complies with the recommended one from Mozilla
+// ATTENTION: When changing any of the following structs, change the compareResultData function accordingly!
+
+type Data struct {
+	Vhost    string             // The target's hostname
+	Ciphers  map[string]*Cipher // The target's supported cipher suites. Key format: "protocol|cipher_id"
+	Chains   []*Chain           // The target's certificate chains
+	Settings *Settings          // The target's SSL/TLS configuration details
+	Issues   *Issues            // The target's identified security concerns and vulnerabilities
+	Curves   *Curves            // The target's supported or rejected elliptic curves
 }
 
 type Cipher struct {
@@ -167,7 +148,7 @@ type Cipher struct {
 	Draft               bool           // Indicates whether the cipher suite is a draft.
 }
 
-type CertDeployment struct {
+type Chain struct {
 	Certificates  []*Certificate // Certificates of this specific deployment
 	ValidatedBy   []string       // Name(s) of the trust store(s) that successfully validated this deployment
 	HasValidOrder bool           // Indicates whether the certificate chain was sent in valid order
@@ -200,24 +181,58 @@ type Certificate struct {
 	Sha1Fingerprint        string             // SHA1 fingerprint of the certificate.
 }
 
-type Data struct {
-	Vhost                 string             // The target's hostname
-	Issues                *Issues            // Cipher basic info
-	Ciphers               map[string]*Cipher // Map of [protocol + "|" + cipher id] = cipher
-	CertDeployments       []*CertDeployment  // A server can have multiple certificate chains, e.g. in order to support older clients. Unfortunately SSLyze does not return any information on which chain is linked to which client (/Cipher/Server name used for SNI...)
-	EllipticCurves        *EllipticCurves    // Information about the elliptic curves that the target supports or rejects
-	ComplianceTestDetails string             // Details to the check against Mozilla's SSL config. Each target will have its own IsCompliant flag, but this variable contains further details of the check.
+type Settings struct {
+	// Any 'false' value indicates place for improvement, ideally they would be true!
+	LowestProtocol               Protocol // The lowest SSL / TLS version that is supported by the server.
+	MinStrength                  int      // The minimum of EncryptionStrength, MacStrength(/PrfStrength) and PublicKeyStrength across all ciphers and certificates.
+	Ems                          bool     // Extended Master Secret to prevent triple handshake and related TLS attacks
+	TlsFallbackScsv              bool     // TLS_FALLBACK_SCSV mechanism to prevent downgrade attacks
+	SecureRenegotiation          bool     // Indicates whether the server supports secure renegotiation.
+	SessionResumptionWithId      bool     // If set a session resumption using IDs is possible.
+	SessionResumptionWithTickets bool     // If set a session resumption using session tickets is possible.
+	IsCompliantToMozillaConfig   bool     // https://ssl-config.mozilla.org/    Check if the server's SSL config complies with the recommended one from Mozilla
 }
 
-type EllipticCurves struct {
-	RejectedCurves         []EllipticCurve // The curves that the target rejects
+type Issues struct {
+	// Any 'true' value indicates a vulnerability, they all should be false!
+	LowEncryptionStrength   bool // Indicates whether the minimum of encryption strength is lower than 128 bit.
+	AnyChainInvalid         bool // Indicates whether any certificate chain is invalid.
+	AnyChainInvalidOrder    bool // Indicates whether any certificate chain has an invalid order.
+	ClientRenegotiationDos  bool // Indicates whether the server is vulnerable to client renegotiation DOS.
+	CcsInjection            bool // 								(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0224)
+	EarlyDataSupported      bool // Early data can have a negative impact if session management is not implemented carefully.
+	NoPerfectForwardSecrecy bool // If this is set, the server supports at least one cipher suite that does not provide prefect forward secrecy.
+	Sslv2Enabled            bool // Indicates the presence of at least one SSLv2 cipher suite.
+	Sslv3Enabled            bool // Indicates the presence of at least one SSLv3 cipher suite.
+	Tlsv1_0Enabled          bool // Indicates the presence of at least one TLS 1.0 cipher suite.
+	Tlsv1_1Enabled          bool // Indicates the presence of at least one TLS 1.1 cipher suite.
+	ExportSuite             bool // Indicates whether the server supports an export cipher suite.
+	DraftSuite              bool // Indicates whether the server supports a draft cipher suite.
+	Md2Enabled              bool // Indicates the presence of at least one cipher suite with MD2 mac (/prf).
+	Md5Enabled              bool // Indicates the presence of at least one cipher suite with MD5 mac (/prf).
+	Rc4Enabled              bool // Indicates the presence of at least one cipher suite with RC4 encryption.
+	Sha1Enabled             bool // Indicates the presence of at least one cipher suite with SHA1 mac (/prf).
+	Beast                   bool // 								(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2011-3389)
+	Crime                   bool // True if TLS compression is supported by the server, thereby enabling the CRIME attack. (https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2012-4929)
+	Drown                   bool // https://drownattack.com/ 		(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-0800)
+	Freak                   bool // https://freakattack.com			(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-0204)
+	Heartbleed              bool // http://heartbleed.com/			(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-0160)
+	Logjam                  bool // https://weakdh.org/logjam.html	(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2015-4000) (Currently only export ciphers are tested)
+	Lucky13                 bool // 								(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2013-0169)
+	Poodle                  bool // 								(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-3566, https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2014-8730)
+	Robot                   bool // https://robotattack.org/
+	Sweet32                 bool // https://sweet32.info/ 			(https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2016-2183)
+}
+
+type Curves struct {
 	SupportedCurves        []EllipticCurve // The curves that the target accepts
-	SupportECDHKeyExchange bool            // Indicates whether the target supports ECDH Key Exchange
+	RejectedCurves         []EllipticCurve // The curves that the target rejects
+	SupportEcdhKeyExchange bool            // Indicates whether the target supports ECDH Key Exchange
 }
 
 type EllipticCurve struct {
 	Name       string
-	OpenSSLnid int
+	OpenSslNid int
 }
 
 type Result struct {
@@ -244,7 +259,8 @@ func newScanner( // Private, because the public factories are in the os specific
 	logger utils.Logger, // Can be any logger implementing our minimalistic interface. Wrap your logger to satisfy the interface, if necessary (like utils.LoggerTest).
 	sslyzeCommand string, // Executable to call or Python3 SSLyze call, depending on operating system
 	sslyzeCommandArgs []string,
-	sslyzeAdditionalTruststore string, // Sslyze always applies default CAs, but you can add additional ones via custom trust store
+	sslyzeAdditionalTruststore string, // SSLyze always applies default CAs, but you can add additional ones via custom trust store
+	sslyzeVersion utils.Version,
 	target string,
 	port int,
 	vhosts []string,
@@ -284,7 +300,15 @@ func newScanner( // Private, because the public factories are in the os specific
 	}
 
 	// Prepare SSLyze main scan with original target as SNI
-	sslyzeScanner, errSslyze := initSslyze(sslyzeCommand, sslyzeCommandArgs, sslyzeAdditionalTruststore, target, port, target)
+	sslyzeScanner, errSslyze := initSslyze(
+		sslyzeCommand,
+		sslyzeCommandArgs,
+		sslyzeAdditionalTruststore,
+		sslyzeVersion,
+		target,
+		port,
+		target,
+	)
 	if errSslyze != nil {
 		return nil, errSslyze
 	}
@@ -294,7 +318,15 @@ func newScanner( // Private, because the public factories are in the os specific
 	for _, vhost := range vhosts {
 
 		// Prepare the SSLyze scan. Other scans target with sni=other hostname
-		sslyzeScannerVhost, errSslyzeOther := initSslyze(sslyzeCommand, sslyzeCommandArgs, sslyzeAdditionalTruststore, target, port, vhost)
+		sslyzeScannerVhost, errSslyzeOther := initSslyze(
+			sslyzeCommand,
+			sslyzeCommandArgs,
+			sslyzeAdditionalTruststore,
+			sslyzeVersion,
+			target,
+			port,
+			vhost,
+		)
 		if errSslyzeOther != nil {
 			return nil, errSslyzeOther
 		}
@@ -330,7 +362,9 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 
 	// Set scan started flag and calculate deadline
 	s.Started = time.Now()
-	s.deadline = time.Now().Add(timeout)
+	if timeout > 0 {
+		s.deadline = time.Now().Add(timeout)
+	}
 	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
 
 	// Execute scan logic
@@ -398,7 +432,7 @@ func (s *Scanner) execute() *Result {
 			cancel()
 
 			// Check if the scan timed out
-			if errSslyze.Error() == "SSLyze scan timed out" {
+			if errors.Is(errSslyze, gosslyze.ErrContextExpired) {
 				s.logger.Debugf("SSLyze scan timout reached during SNI '%s'", target)
 				result.Status = utils.StatusDeadline
 				break
@@ -419,7 +453,7 @@ func (s *Scanner) execute() *Result {
 		parsedData := parseSslyzeResult(s.logger, target, scanResult)
 
 		// Check if the scan returned something at all and drop empty results
-		if len(parsedData.Ciphers) == 0 || len(parsedData.CertDeployments) == 0 {
+		if len(parsedData.Ciphers) == 0 || len(parsedData.Chains) == 0 {
 			s.logger.Debugf("No SSL data discovered.")
 			continue
 		}
@@ -447,6 +481,7 @@ func initSslyze(
 	sslyzeCommand string,
 	sslyzeCommandArgs []string,
 	sslyzeAdditionalTruststore string,
+	sslyzeVersion utils.Version,
 	target string,
 	port int,
 	sni string,
@@ -470,6 +505,7 @@ func initSslyze(
 	s.WithRenegotiation()
 	s.WithResume()
 	s.WithResumeAttempts(10)
+	s.WithHttpHeaders()
 	s.WithCompression()
 	s.WithFallback()
 	s.WithRobot()
@@ -478,6 +514,7 @@ func initSslyze(
 	s.WithEarlyData()
 	s.WithEllipticCurves()
 	s.WithMozillaConfig("intermediate") // Check server's config against Mozilla's intermediate recommended SSL config
+	s.WithQuiet()                       // Does not output anything to stdout; useful when using --json_out.
 
 	// Send a STARTTLS message to protocols like smtp, xmpp, pop3, ftp, ... The protocol will be determined based on
 	// the port.
@@ -485,88 +522,47 @@ func initSslyze(
 		s.WithStartTls(protocol)
 	}
 
-	// Sets the CA trust store, if a custom one is supplied. Otherwise the default ones will be taken.
+	// Sets the CA trust store, if a custom one is supplied. Otherwise, the default ones will be taken.
 	if len(sslyzeAdditionalTruststore) > 0 {
 		s.WithCaFile(sslyzeAdditionalTruststore)
 	}
 
+	// Set scanner flags for SSLyze >= 6.1.0
+	featureMinVersion := utils.Version{Major: 6, Minor: 1, Patch: 0}
+	if sslyzeVersion.IsGreaterEqualThan(featureMinVersion) {
+		s.WithEms() // Check for TLS Extended Master Secret extension support.
+	}
+
+	// Return scanner
 	return &s, nil
 }
 
-// compareVersion compares the given version string retrieved from the python interpreter at pythonPath with the provided
-// integer slice. Example wanted: []int{3, 5, -1}, where 3 is the major and 5 the minor version. A negative number
-// signalizes to ignore this category.
-// This little helper function is used when checking for Python and SSLyze before creating a new scanner.
-func compareVersion(got string, wanted []int) (bool, error) {
-
-	// Some sanity checks
-	if len(wanted) != 3 {
-		return false, fmt.Errorf("wanted version number should be of length 3 not %d", len(wanted))
-	}
-
-	gotCategories := strings.Split(got, ".")
-
-	if len(gotCategories) != 3 {
-		return false, fmt.Errorf("version number should be of length 3 not %d", len(gotCategories))
-	}
-
-	// Compare the major, minor and patch version
-	for i, v := range gotCategories {
-		if wanted[i] < 0 {
-			continue
-		}
-
-		num, errAtoi := strconv.Atoi(v)
-		if errAtoi != nil {
-			return false, errAtoi
-		}
-
-		if num < wanted[i] {
-			return false, nil
-		}
-	}
-
-	return true, nil
-}
-
-// checkSSLyzeVersion extracts the installed SSLyze version from the help message and compares it to the required version
-func checkSSLyzeVersion(msgHelp string) (bool, error) {
+// parseSslyzeVersion parses the version information from the help dialog response of SSLyze
+func parseSslyzeVersion(msgHelp string) (utils.Version, error) {
 	versionIndex := strings.Index(msgHelp, "SSLyze version ")
 	argumentsIndex := strings.Index(msgHelp, "positional arguments")
 
 	// Abort if '--help' command did not return expected result
 	if versionIndex == -1 || argumentsIndex == -1 {
-		return false, fmt.Errorf(
+		return utils.Version{}, fmt.Errorf(
 			"could not extract SSLyze version, please update to '%s'",
-			versionSliceToString(sslyzeVersion),
+			sslyzeMinVersion.String(),
 		)
 	}
 
 	// Extract and trim SSLyze's version number from help message
-	version := strings.Trim(msgHelp[versionIndex+len("SSLyze version "):argumentsIndex], "\n\t\r ")
+	v := strings.Trim(msgHelp[versionIndex+len("SSLyze version "):argumentsIndex], "\n\t\r ")
 
-	// Check if used version is compatible to the required one
-	versionOk, errVersion := compareVersion(version, sslyzeVersion)
+	// Generate version struct
+	version, errVersion := utils.NewVersion(v)
 	if errVersion != nil {
-		return false, fmt.Errorf("could not validate SSLyze version '%s': %s", version, errVersion)
+		return utils.Version{}, fmt.Errorf(
+			"could not parse SSLyze version '%s', please update to '%s'",
+			v,
+			sslyzeMinVersion.String(),
+		)
 	}
 
-	// Return version check
-	return versionOk, nil
-}
-
-// This little helper function is used for error logging if the checks for Python and SSLyze before creating a new
-// scanner fail.
-func versionSliceToString(in []int) string {
-	substrings := make([]string, len(in))
-	for i, v := range in {
-		if in[i] < 0 {
-			substrings[i] = "x"
-			continue
-		}
-
-		substrings[i] = strconv.Itoa(v)
-	}
-
-	return strings.Join(substrings, ".")
+	// Return version string
+	return version, nil
 }

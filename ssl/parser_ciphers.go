@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -176,18 +176,21 @@ func getCipher(
 	}
 
 	// Check the inconsistencies in the key size
-	// Actually 3DES has a key size of 168, but there's a Meet-in-the-middle attack which effectively get's that number
-	// down to 112. SSLyze returns this 112 bit key size. Nonetheless we have separate fields for key size and strength.
-	// Therefore we want to have:
+	// Actually 3DES has a key size of 168, but there's a Meet-in-the-middle attack which effectively gets that number
+	// down to 112. SSLyze returns this 112 bit key size. Nonetheless, we have separate fields for key size and strength.
+	// Therefore, we want to have:
 	// EncryptionBits:		168
 	// EncryptionStrength: 	112
 	if cipher.EncryptionBits != sslyzeCipher.KeySize &&
 		!(cipher.Encryption == ENC_TRIPLE_DES && cipher.EncryptionBits == 168 && sslyzeCipher.KeySize == 112) {
 		// We already had one occasion where SSLyze returned a wrong size, therefore we stay with our result but still
 		// log the event in order to inspect it.
-		logger.Warningf("Encryption key size returned by SSLyze does not match with our info for cipher '%s'.",
-			sslyzeCipher.OpensslName)
-
+		logger.Debugf(
+			"Encryption key size returned by SSLyze (%d) does not match with our info for cipher '%s' (%d).",
+			sslyzeCipher.KeySize,
+			sslyzeCipher.OpensslName,
+			cipher.EncryptionBits,
+		)
 	}
 
 	// Add the additional key info into the cipher
@@ -228,15 +231,15 @@ func parseEphemeralKeyInfo(logger utils.Logger, info gosslyze.EphemeralKeyInfo) 
 		// We can not calculate the key strength, because we don't know which method is used
 		return size, 0, extras
 
-	case *gosslyze.EcDhKeyInfo:
-		i := info.(*gosslyze.EcDhKeyInfo)
+	case *gosslyze.EcdhKeyInfo:
+		i := info.(*gosslyze.EcdhKeyInfo)
 		parseBase(&i.BaseKeyInfo)
 		extras = append(extras, "CurveName: "+i.CurveName)
 
 		kex = KEX_ECDHE
 
-	case *gosslyze.NistEcDhKeyInfo:
-		i := info.(*gosslyze.NistEcDhKeyInfo)
+	case *gosslyze.NistEcdhKeyInfo:
+		i := info.(*gosslyze.NistEcdhKeyInfo)
 		parseBase(&i.BaseKeyInfo)
 		extras = append(extras, "CurveName: "+i.CurveName)
 		extras = append(extras, "X: "+base64.StdEncoding.EncodeToString(i.X))

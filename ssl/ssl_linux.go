@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -19,7 +19,11 @@ import (
 )
 
 var (
-	pythonVersion = []int{3, 7, -1}
+	pythonMinVersion = utils.Version{
+		Major: 3,
+		Minor: 7,
+		Patch: 0,
+	}
 )
 
 // NewScanner initializes a new SSLyze scan. Linux specific implementation, Python and SSLyze package required
@@ -46,16 +50,25 @@ func NewScanner(
 	}
 
 	// Trim the Python version number
-	version := strings.Trim(strings.TrimPrefix(out.String(), "Python "), "\n\t\r ")
-	versionOk, errVersion := compareVersion(version, pythonVersion)
-	if errVersion != nil {
-		return nil, fmt.Errorf("could not validate the Python version '%s': %s", out.String(), errVersion)
+	pythonVersionStr := strings.Trim(strings.TrimPrefix(out.String(), "Python "), "\n\t\r ")
+
+	// Parse version from string
+	pythonVersion, errPythonVersion := utils.NewVersion(pythonVersionStr)
+	if errPythonVersion != nil {
+		return nil, fmt.Errorf(
+			"could not parse Python version '%s', please update to '%s'",
+			pythonVersionStr,
+			pythonMinVersion.String(),
+		)
 	}
 
 	// Check if the Python version is up-to-date
-	if !versionOk {
-		return nil, fmt.Errorf("insufficient Python version '%s', please update to '%s'",
-			version, versionSliceToString(pythonVersion))
+	if !pythonVersion.IsGreaterEqualThan(pythonMinVersion) {
+		return nil, fmt.Errorf(
+			"insufficient Python version '%s', please update to '%s'",
+			pythonVersionStr,
+			pythonMinVersion.String(),
+		)
 	}
 
 	// Check whether we can execute the SSLyze library and retrieve the version
@@ -70,19 +83,19 @@ func NewScanner(
 		return nil, fmt.Errorf("'%s %v' can not be executed: %s: %s", pythonPath, args, errCmd, stderr.String())
 	}
 
-	// Extract the SSLyze version, the version flag has been removed and the version is now extracted from the help message
+	// Build version string based on output
 	msgHelp := out.String()
-	versionIsOk, errSSLyzeVersion := checkSSLyzeVersion(msgHelp)
-
-	if errSSLyzeVersion != nil {
-		return nil, fmt.Errorf("error while extracting installed SSLyze version: %s", errSSLyzeVersion)
+	sslyzeVersion, errSslyzeVersion := parseSslyzeVersion(msgHelp)
+	if errSslyzeVersion != nil {
+		return nil, errSslyzeVersion
 	}
 
 	// Check if the SSLyze version is up-to-date
-	if !versionIsOk {
+	if !sslyzeVersion.IsGreaterEqualThan(sslyzeMinVersion) {
 		return nil, fmt.Errorf(
-			"insufficient SSLyze version, please update to '%s'",
-			versionSliceToString(sslyzeVersion),
+			"insufficient SSLyze version '%s', please update to '%s'",
+			sslyzeVersion.String(),
+			sslyzeMinVersion.String(),
 		)
 	}
 
@@ -92,6 +105,7 @@ func NewScanner(
 		pythonPath,
 		[]string{"-m", "sslyze"},
 		sslyzeAdditionalTruststore,
+		sslyzeVersion,
 		target,
 		port,
 		vhosts,

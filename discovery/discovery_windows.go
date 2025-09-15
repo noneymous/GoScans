@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2023.
+* Copyright (c) Siemens AG, 2016-2025.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -138,6 +138,7 @@ func CheckWinpcap() error {
 		return fmt.Errorf("WinPcap not installed")
 	}
 
+	// Return nil as everything went fine
 	return nil
 }
 
@@ -206,6 +207,7 @@ func SetNpcapNoAdmin() error {
 		)
 	}
 
+	// Return nil as everything went fine
 	return nil
 }
 
@@ -331,6 +333,7 @@ func SetRegistryIntValue(root registry.Key, path, key string, value uint32) erro
 		return errGet
 	}
 
+	// Return nil as everything went fine
 	return nil
 }
 
@@ -360,7 +363,7 @@ func CheckNmapFirewall(nmap string) error {
 		return fmt.Errorf("no firewall approval for Nmap")
 	}
 
-	// Return nil if everything is okay
+	// Return nil if everything went fine
 	return nil
 }
 
