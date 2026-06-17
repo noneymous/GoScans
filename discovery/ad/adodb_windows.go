@@ -1,23 +1,24 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
-package active_directory
+package ad
 
 import (
 	"database/sql"
-	"github.com/go-ole/go-ole"
-	_ "github.com/mattn/go-adodb"
-	"github.com/siemens/GoScans/utils"
 	"math"
 	"reflect"
 	"time"
+
+	"github.com/go-ole/go-ole"
+	_ "github.com/mattn/go-adodb"
+	"github.com/siemens/GoScans/utils"
 )
 
 // AdodbQuery queries the given Active Directory service with implicit Windows authentication and returns a
@@ -56,8 +57,8 @@ func AdodbQuery(logger utils.Logger, searchCn string, searchDomain string) *Ad {
 	// Prepare result
 	result := Ad{}
 
-	// Fill up structure from the result
-	for computerResult.Next() {
+	// Fill up structure from the result (only a single result is expected)
+	if computerResult.Next() {
 
 		// Populate search result into AD struct
 		errPopulateComputer := adodbPopulate(&result, computerResult)
@@ -70,9 +71,6 @@ func AdodbQuery(logger utils.Logger, searchCn string, searchDomain string) *Ad {
 			)
 			return &result
 		}
-
-		// Break as there is only a single result expected
-		break
 	}
 
 	// Execute user query, if managedBy is set
@@ -103,8 +101,8 @@ func adodbExpand(logger utils.Logger, adDb *sql.DB, result *Ad) {
 	// Make sure query gets closed on exit
 	defer func() { _ = userResult.Close() }()
 
-	// Fill up structure from the result
-	for userResult.Next() {
+	// Fill up structure from the result (only a single result is expected)
+	if userResult.Next() {
 
 		// Populate search result into AD struct
 		errPopulateUser := adodbPopulate(result, userResult)
@@ -117,9 +115,6 @@ func adodbExpand(logger utils.Logger, adDb *sql.DB, result *Ad) {
 			)
 			return
 		}
-
-		// Break as there is only a single result expected
-		break
 	}
 }
 

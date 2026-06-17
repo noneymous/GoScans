@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,12 +11,14 @@
 package discovery
 
 import (
-	"github.com/siemens/GoScans/_test"
-	"golang.org/x/sys/windows/registry"
 	"path/filepath"
 	"testing"
+
+	"github.com/siemens/GoScans/_test"
+	"golang.org/x/sys/windows/registry"
 )
 
+// TestCheckWinpcap verifies that CheckWinpcap returns an error when WinPcap is not installed.
 func TestCheckWinpcap(t *testing.T) {
 
 	// Prepare and run test cases
@@ -24,7 +26,7 @@ func TestCheckWinpcap(t *testing.T) {
 		name    string
 		wantErr bool
 	}{
-		{"valid", true},
+		{name: "valid", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -35,6 +37,7 @@ func TestCheckWinpcap(t *testing.T) {
 	}
 }
 
+// TestCheckNpcap verifies that CheckNpcap returns no error when Npcap is installed.
 func TestCheckNpcap(t *testing.T) {
 
 	// Prepare and run test cases
@@ -42,7 +45,7 @@ func TestCheckNpcap(t *testing.T) {
 		name    string
 		wantErr bool
 	}{
-		{"valid", false},
+		{name: "valid", wantErr: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,16 +56,17 @@ func TestCheckNpcap(t *testing.T) {
 	}
 }
 
+// TestImportRegistryFile verifies that ImportRegistryFile returns an error without admin privileges or for invalid paths.
 func TestImportRegistryFile(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
+	testSettings := _test.GetSettings()
+	if testSettings.PathNmap == "" {
+		t.Skip("Integration test skipped: PathNmap not configured in _test/settings.go")
 		return
 	}
 
-	// Prepare test variables
+	// Prepare unit test data
 	patchPath := filepath.Join(testSettings.PathNmapDir, "nmap_performance.reg")
 
 	// Prepare and run test cases
@@ -71,8 +75,16 @@ func TestImportRegistryFile(t *testing.T) {
 		filePath string
 		wantErr  bool
 	}{
-		{"invalid-privileges", patchPath, true}, // throws error without admin process privileges
-		{"invalid-path", "notexisting", true},
+		{
+			name:     "invalid-privileges",
+			filePath: patchPath,
+			wantErr:  true,
+		}, // throws error without admin process privileges
+		{
+			name:     "invalid-path",
+			filePath: "notexisting",
+			wantErr:  true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -83,6 +95,7 @@ func TestImportRegistryFile(t *testing.T) {
 	}
 }
 
+// TestCheckNmapPerformancePatch verifies that CheckNmapPerformancePatch detects whether the performance patch is applied.
 func TestCheckNmapPerformancePatch(t *testing.T) {
 
 	// Prepare and run test cases
@@ -90,7 +103,7 @@ func TestCheckNmapPerformancePatch(t *testing.T) {
 		name    string
 		wantErr bool
 	}{
-		{"patch-SHOULD-be-applied", false},
+		{name: "patch-should-be-applied", wantErr: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,7 +114,7 @@ func TestCheckNmapPerformancePatch(t *testing.T) {
 	}
 }
 
-// TestCheckRegistryIntValue also covers GetRegistryIntValue
+// TestCheckRegistryIntValue verifies that CheckRegistryIntValue validates registry integer values and covers GetRegistryIntValue.
 func TestCheckRegistryIntValue(t *testing.T) {
 
 	// Prepare and run test cases
@@ -116,10 +129,26 @@ func TestCheckRegistryIntValue(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"valid-value", args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "LastBootSucceeded", 1}, false},
-		{"invalid-path", args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\notexisting`, "key", 815}, true},
-		{"invalid-key", args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "notexisting", 815}, true},
-		{"invalid-value", args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "LastBootSucceeded", 815}, true},
+		{
+			name:    "valid-value",
+			args:    args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "LastBootSucceeded", 1},
+			wantErr: false,
+		},
+		{
+			name:    "invalid-path",
+			args:    args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\notexisting`, "key", 815},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-key",
+			args:    args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "notexisting", 815},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-value",
+			args:    args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "LastBootSucceeded", 815},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -130,6 +159,7 @@ func TestCheckRegistryIntValue(t *testing.T) {
 	}
 }
 
+// TestGetRegistryStringValue verifies that GetRegistryStringValue retrieves the correct string value from the registry.
 func TestGetRegistryStringValue(t *testing.T) {
 
 	// Prepare and run test cases
@@ -144,9 +174,24 @@ func TestGetRegistryStringValue(t *testing.T) {
 		wantVal string
 		wantErr bool
 	}{
-		{"valid-value", args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Print`, "ConfigModule"}, "PrintConfig.dll", false},
-		{"invalid-path", args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\notexisting`, "key"}, "", true},
-		{"invalid-key", args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "notexisting"}, "", true},
+		{
+			name:    "valid-value",
+			args:    args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Print`, "ConfigModule"},
+			wantVal: "PrintConfig.dll",
+			wantErr: false,
+		},
+		{
+			name:    "invalid-path",
+			args:    args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\notexisting`, "key"},
+			wantVal: "",
+			wantErr: true,
+		},
+		{
+			name:    "invalid-key",
+			args:    args{registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control`, "notexisting"},
+			wantVal: "",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,6 +205,7 @@ func TestGetRegistryStringValue(t *testing.T) {
 	}
 }
 
+// TestCheckNmapFirewall verifies that CheckNmapFirewall returns an error for an executable not in the Windows firewall list.
 func TestCheckNmapFirewall(t *testing.T) {
 
 	// Prepare and run test cases
@@ -171,7 +217,11 @@ func TestCheckNmapFirewall(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"declined-app", args{`C:\notexisting.exe`}, true},
+		{
+			name:    "declined-app",
+			args:    args{`C:\notexisting.exe`},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -182,12 +232,13 @@ func TestCheckNmapFirewall(t *testing.T) {
 	}
 }
 
+// TestSetNmapFirewall verifies that SetNmapFirewall returns an error without admin process privileges.
 func TestSetNmapFirewall(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
+	testSettings := _test.GetSettings()
+	if testSettings.PathNmap == "" {
+		t.Skip("Integration test skipped: PathNmap not configured in _test/settings.go")
 		return
 	}
 
@@ -197,7 +248,11 @@ func TestSetNmapFirewall(t *testing.T) {
 		nmapPath string
 		wantErr  bool
 	}{
-		{"invalid-privileges", testSettings.PathNmap, true}, // throws error without admin process privileges
+		{
+			name:     "invalid-privileges",
+			nmapPath: testSettings.PathNmap,
+			wantErr:  true,
+		}, // throws error without admin process privileges
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

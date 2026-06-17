@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -14,6 +14,7 @@ import (
 	"testing"
 )
 
+// TestResolvesToIp verifies that ResolvesToIp correctly reports whether a hostname resolves to the expected IP address.
 func TestResolvesToIp(t *testing.T) {
 
 	// Prepare and run test cases
@@ -26,14 +27,46 @@ func TestResolvesToIp(t *testing.T) {
 		args args
 		want bool
 	}{
-		{"valid-resolving", args{"www.ccc.de", "195.54.164.39"}, true},
-		{"invalid-confused-input", args{"195.54.164.39", "www.ccc.de"}, false}, // Ip as hostname can be resolved to itself :)
-		{"invalid-resolving", args{"sub.domain.tld", "195.54.164.39"}, false},
-		{"invalid-not-resolving", args{"notexisting.domain.tld", "195.54.164.39"}, false},
-		{"invalid-hostname", args{"", "195.54.164.39"}, false},
-		{"invalid-ip1", args{"google.com", "notanipaddress"}, false},
-		{"invalid-ip2", args{"google.com", ""}, false},
-		{"invalid-input", args{"", ""}, false},
+		{
+			name: "valid-resolving",
+			args: args{hostname: "www.ccc.de", expectedIp: "195.54.164.39"},
+			want: true,
+		},
+		{
+			name: "invalid-confused-input",
+			args: args{hostname: "195.54.164.39", expectedIp: "www.ccc.de"},
+			want: false, // Ip as hostname can be resolved to itself :)
+		},
+		{
+			name: "invalid-resolving",
+			args: args{hostname: "sub.domain.tld", expectedIp: "195.54.164.39"},
+			want: false,
+		},
+		{
+			name: "invalid-not-resolving",
+			args: args{hostname: "notexisting.domain.tld", expectedIp: "195.54.164.39"},
+			want: false,
+		},
+		{
+			name: "invalid-hostname",
+			args: args{hostname: "", expectedIp: "195.54.164.39"},
+			want: false,
+		},
+		{
+			name: "invalid-ip1",
+			args: args{hostname: "google.com", expectedIp: "notanipaddress"},
+			want: false,
+		},
+		{
+			name: "invalid-ip2",
+			args: args{hostname: "google.com", expectedIp: ""},
+			want: false,
+		},
+		{
+			name: "invalid-input",
+			args: args{hostname: "", expectedIp: ""},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -44,34 +77,60 @@ func TestResolvesToIp(t *testing.T) {
 	}
 }
 
+// TestResolvesToHostname verifies that ResolvesToHostname correctly reports whether an IP address resolves to the expected hostname.
 func TestResolvesToHostname(t *testing.T) {
 
 	// Prepare and run test cases
 	type args struct {
 		ip               string
-		expectedHostanme string
+		expectedHostname string
 	}
 	tests := []struct {
 		name string
 		args args
 		want bool
 	}{
-		{"valid-resolving", args{"8.8.4.4", "dns.google"}, true},
-		{"invalid", args{"8.8.4.4", "notexisting"}, false},
-		{"invalid-ip", args{"a.12.12.a", "google.com"}, false},
-		{"invalid-empty-ip", args{"", "google.com"}, false},
-		{"invalid-empty-hostname", args{"192.168.0.1", ""}, false},
-		{"invalid-not-resolving", args{"192.168.0.1", "scan.domain.tld"}, false},
+		{
+			name: "valid-resolving",
+			args: args{ip: "8.8.4.4", expectedHostname: "dns.google"},
+			want: true,
+		},
+		{
+			name: "invalid",
+			args: args{ip: "8.8.4.4", expectedHostname: "notexisting"},
+			want: false,
+		},
+		{
+			name: "invalid-ip",
+			args: args{ip: "a.12.12.a", expectedHostname: "google.com"},
+			want: false,
+		},
+		{
+			name: "invalid-empty-ip",
+			args: args{ip: "", expectedHostname: "google.com"},
+			want: false,
+		},
+		{
+			name: "invalid-empty-hostname",
+			args: args{ip: "192.168.0.1", expectedHostname: ""},
+			want: false,
+		},
+		{
+			name: "invalid-not-resolving",
+			args: args{ip: "192.168.0.1", expectedHostname: "scan.domain.tld"},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ResolvesToHostname(tt.args.ip, tt.args.expectedHostanme); got != tt.want {
+			if got := ResolvesToHostname(tt.args.ip, tt.args.expectedHostname); got != tt.want {
 				t.Errorf("ResolvesToHostname() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// TestIsValidHostname verifies that IsValidHostname correctly identifies valid and invalid hostnames.
 func TestIsValidHostname(t *testing.T) {
 
 	// Prepare and run test cases
@@ -80,30 +139,126 @@ func TestIsValidHostname(t *testing.T) {
 		hostname string
 		want     bool
 	}{
-		{"valid", "hostname", true},     // hostname without domain can be valid too in local environments, systems are automatically resolving to the local domain
-		{"valid2", "tfpr-a0-p03", true}, // hostname without domain can be valid too in local environments, systems are automatically resolving to the local domain
-		{"valid3", "sub.domain.tld", true},
-		{"valid-hyphen", "s-ub.domain.tld", true},
-		{"valid-localhost", "localhost", true},
-		{"valid-hostname", "hostname", true}, // within an AD domain it's also possible to contact hostnames, instead of fqdns
-		{"invalid-hyphen", "-sub.domain.tld", false},
-		{"invalid1", "!=§$%", false},
-		{"invalid2", "sub.domain.tld/26", false},
-		{"invalid4", "sub.domain.tld\\26", false},
-		{"invalid-dn", "cn=0123456ab,cn=forrest,cn=domain,cn=tld", false},
-		{"invalid-empty", "", false},
-		{"invalid-empty", " ", false},
-		{"invalid-space", "su b.domain.tld", false},
-		{"invalid-space2", "t ld", false},
-		{"invalid-start", ".tld", false},
-		{"invalid-start2", " tld", false},
-		{"invalid-start3", "-tld", false},
-		{"invalid-end", "tld.", false},
-		{"invalid-end2", "tld ", false},
-		{"invalid-end3", "tld-", false},
-		{"invalid-ipv4", "127.0.0.1", false},
-		{"invalid-ipv4", "8.8.8.8", false},
-		{"invalid-ipv6", "1::", false},
+		{
+			name:     "valid",
+			hostname: "hostname",
+			want:     true, // hostname without domain can be valid too in local environments, systems are automatically resolving to the local domain
+		},
+		{
+			name:     "valid2",
+			hostname: "tfpr-a0-p03",
+			want:     true, // hostname without domain can be valid too in local environments, systems are automatically resolving to the local domain
+		},
+		{
+			name:     "valid3",
+			hostname: "sub.domain.tld",
+			want:     true,
+		},
+		{
+			name:     "valid-hyphen",
+			hostname: "s-ub.domain.tld",
+			want:     true,
+		},
+		{
+			name:     "valid-localhost",
+			hostname: "localhost",
+			want:     true,
+		},
+		{
+			name:     "valid-hostname",
+			hostname: "hostname",
+			want:     true, // within an AD domain it's also possible to contact hostnames, instead of fqdns
+		},
+		{
+			name:     "invalid-hyphen",
+			hostname: "-sub.domain.tld",
+			want:     false,
+		},
+		{
+			name:     "invalid1",
+			hostname: "!=§$%",
+			want:     false,
+		},
+		{
+			name:     "invalid2",
+			hostname: "sub.domain.tld/26",
+			want:     false,
+		},
+		{
+			name:     "invalid4",
+			hostname: "sub.domain.tld\\26",
+			want:     false,
+		},
+		{
+			name:     "invalid-dn",
+			hostname: "cn=0123456ab,cn=forrest,cn=domain,cn=tld",
+			want:     false,
+		},
+		{
+			name:     "invalid-empty",
+			hostname: "",
+			want:     false,
+		},
+		{
+			name:     "invalid-empty-space",
+			hostname: " ",
+			want:     false,
+		},
+		{
+			name:     "invalid-space",
+			hostname: "su b.domain.tld",
+			want:     false,
+		},
+		{
+			name:     "invalid-space2",
+			hostname: "t ld",
+			want:     false,
+		},
+		{
+			name:     "invalid-start",
+			hostname: ".tld",
+			want:     false,
+		},
+		{
+			name:     "invalid-start2",
+			hostname: " tld",
+			want:     false,
+		},
+		{
+			name:     "invalid-start3",
+			hostname: "-tld",
+			want:     false,
+		},
+		{
+			name:     "invalid-end",
+			hostname: "tld.",
+			want:     false,
+		},
+		{
+			name:     "invalid-end2",
+			hostname: "tld ",
+			want:     false,
+		},
+		{
+			name:     "invalid-end3",
+			hostname: "tld-",
+			want:     false,
+		},
+		{
+			name:     "invalid-ipv4",
+			hostname: "127.0.0.1",
+			want:     false,
+		},
+		{
+			name:     "invalid-ipv4-2",
+			hostname: "8.8.8.8",
+			want:     false,
+		},
+		{
+			name:     "invalid-ipv6",
+			hostname: "1::",
+			want:     false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -114,6 +269,7 @@ func TestIsValidHostname(t *testing.T) {
 	}
 }
 
+// TestIsValidIp verifies that IsValidIp correctly identifies valid IPv4 and IPv6 addresses while rejecting ranges, hostnames, and ports.
 func TestIsValidIp(t *testing.T) {
 
 	// Prepare and run test cases
@@ -122,30 +278,106 @@ func TestIsValidIp(t *testing.T) {
 		s    string
 		want bool
 	}{
-		{"ipv4-localhost", "127.0.0.1", true},
-		{"ipv4-1", "8.8.8.8", true},
-		{"ipv4-2", "123.123.123.123", true},
+		{
+			name: "ipv4-localhost",
+			s:    "127.0.0.1",
+			want: true,
+		},
+		{
+			name: "ipv4-1",
+			s:    "8.8.8.8",
+			want: true,
+		},
+		{
+			name: "ipv4-2",
+			s:    "123.123.123.123",
+			want: true,
+		},
 
-		{"ipv6-localhost", "1::", true},
-		{"ipv6", "fe80:3::1ff:fe23:4567:890a", true},
-		{"ipv6-embraced", "[fe80:3::1ff:fe23:4567:890a]", false},
+		{
+			name: "ipv6-localhost",
+			s:    "1::",
+			want: true,
+		},
+		{
+			name: "ipv6",
+			s:    "fe80:3::1ff:fe23:4567:890a",
+			want: true,
+		},
+		{
+			name: "ipv6-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]",
+			want: false,
+		},
 
-		{"ipv4-range-1", "192.168.0.1/32", false},
-		{"ipv4-range-254", "192.168.0.1/24", false},
-		{"ipv4-range-4294967294", "192.168.0.1/0", false},
-		{"ipv4-range-2147483646", "192.168.0.1/1", false},
-		{"ipv6-range-20282409603651670423947251286016", "1::/24", false},
-		{"ipv6-range-20282409603651670423947251286016", "fe80:3::1ff:fe23:4567:890a/24", false},
-		{"ipv6-range-20282409603651670423947251286016-embraced", "[fe80:3::1ff:fe23:4567:890a]/24", false},
+		{
+			name: "ipv4-range-1",
+			s:    "192.168.0.1/32",
+			want: false,
+		},
+		{
+			name: "ipv4-range-254",
+			s:    "192.168.0.1/24",
+			want: false,
+		},
+		{
+			name: "ipv4-range-4294967294",
+			s:    "192.168.0.1/0",
+			want: false,
+		},
+		{
+			name: "ipv4-range-2147483646",
+			s:    "192.168.0.1/1",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016",
+			s:    "1::/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-2",
+			s:    "fe80:3::1ff:fe23:4567:890a/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]/24",
+			want: false,
+		},
 
-		{"domain-tld", "domain.tld", false},
-		{"domain-root", "domain", false},
+		{
+			name: "domain-tld",
+			s:    "domain.tld",
+			want: false,
+		},
+		{
+			name: "domain-root",
+			s:    "domain",
+			want: false,
+		},
 
-		{"ipv4-with-port", "123.123.123.123:443", false},
-		{"ipv6-with-port", "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443", false},
-		{"domain-with-port", "domain.tld:443", false},
+		{
+			name: "ipv4-with-port",
+			s:    "123.123.123.123:443",
+			want: false,
+		},
+		{
+			name: "ipv6-with-port",
+			s:    "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443",
+			want: false,
+		},
+		{
+			name: "domain-with-port",
+			s:    "domain.tld:443",
+			want: false,
+		},
 
-		{"grabage", "in valid", false},
+		{
+			name: "grabage",
+			s:    "in valid",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -156,6 +388,7 @@ func TestIsValidIp(t *testing.T) {
 	}
 }
 
+// TestIsValidIpV4 verifies that IsValidIpV4 accepts valid IPv4 addresses and rejects IPv6, ranges, hostnames, and addresses with ports.
 func TestIsValidIpV4(t *testing.T) {
 
 	// Prepare and run test cases
@@ -164,30 +397,106 @@ func TestIsValidIpV4(t *testing.T) {
 		s    string
 		want bool
 	}{
-		{"ipv4-localhost", "127.0.0.1", true},
-		{"ipv4-1", "8.8.8.8", true},
-		{"ipv4-2", "123.123.123.123", true},
+		{
+			name: "ipv4-localhost",
+			s:    "127.0.0.1",
+			want: true,
+		},
+		{
+			name: "ipv4-1",
+			s:    "8.8.8.8",
+			want: true,
+		},
+		{
+			name: "ipv4-2",
+			s:    "123.123.123.123",
+			want: true,
+		},
 
-		{"ipv6-localhost", "1::", false},
-		{"ipv6", "fe80:3::1ff:fe23:4567:890a", false},
-		{"ipv6-embraced", "[fe80:3::1ff:fe23:4567:890a]", false},
+		{
+			name: "ipv6-localhost",
+			s:    "1::",
+			want: false,
+		},
+		{
+			name: "ipv6",
+			s:    "fe80:3::1ff:fe23:4567:890a",
+			want: false,
+		},
+		{
+			name: "ipv6-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]",
+			want: false,
+		},
 
-		{"ipv4-range-1", "192.168.0.1/32", false},
-		{"ipv4-range-254", "192.168.0.1/24", false},
-		{"ipv4-range-4294967294", "192.168.0.1/0", false},
-		{"ipv4-range-2147483646", "192.168.0.1/1", false},
-		{"ipv6-range-20282409603651670423947251286016", "1::/24", false},
-		{"ipv6-range-20282409603651670423947251286016", "fe80:3::1ff:fe23:4567:890a/24", false},
-		{"ipv6-range-20282409603651670423947251286016-embraced", "[fe80:3::1ff:fe23:4567:890a]/24", false},
+		{
+			name: "ipv4-range-1",
+			s:    "192.168.0.1/32",
+			want: false,
+		},
+		{
+			name: "ipv4-range-254",
+			s:    "192.168.0.1/24",
+			want: false,
+		},
+		{
+			name: "ipv4-range-4294967294",
+			s:    "192.168.0.1/0",
+			want: false,
+		},
+		{
+			name: "ipv4-range-2147483646",
+			s:    "192.168.0.1/1",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016",
+			s:    "1::/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-2",
+			s:    "fe80:3::1ff:fe23:4567:890a/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]/24",
+			want: false,
+		},
 
-		{"domain-tld", "domain.tld", false},
-		{"domain-root", "domain", false},
+		{
+			name: "domain-tld",
+			s:    "domain.tld",
+			want: false,
+		},
+		{
+			name: "domain-root",
+			s:    "domain",
+			want: false,
+		},
 
-		{"ipv4-with-port", "123.123.123.123:443", false},
-		{"ipv6-with-port", "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443", false},
-		{"domain-with-port", "domain.tld:443", false},
+		{
+			name: "ipv4-with-port",
+			s:    "123.123.123.123:443",
+			want: false,
+		},
+		{
+			name: "ipv6-with-port",
+			s:    "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443",
+			want: false,
+		},
+		{
+			name: "domain-with-port",
+			s:    "domain.tld:443",
+			want: false,
+		},
 
-		{"grabage", "in valid", false},
+		{
+			name: "grabage",
+			s:    "in valid",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -198,6 +507,7 @@ func TestIsValidIpV4(t *testing.T) {
 	}
 }
 
+// TestIsValidIpV6 verifies that IsValidIpV6 accepts valid IPv6 addresses and rejects IPv4, ranges, hostnames, and addresses with ports.
 func TestIsValidIpV6(t *testing.T) {
 
 	// Prepare and run test cases
@@ -206,30 +516,106 @@ func TestIsValidIpV6(t *testing.T) {
 		s    string
 		want bool
 	}{
-		{"ipv4-localhost", "127.0.0.1", false},
-		{"ipv4-1", "8.8.8.8", false},
-		{"ipv4-2", "123.123.123.123", false},
+		{
+			name: "ipv4-localhost",
+			s:    "127.0.0.1",
+			want: false,
+		},
+		{
+			name: "ipv4-1",
+			s:    "8.8.8.8",
+			want: false,
+		},
+		{
+			name: "ipv4-2",
+			s:    "123.123.123.123",
+			want: false,
+		},
 
-		{"ipv6-localhost", "1::", true},
-		{"ipv6", "fe80:3::1ff:fe23:4567:890a", true},
-		{"ipv6-embraced", "[fe80:3::1ff:fe23:4567:890a]", false},
+		{
+			name: "ipv6-localhost",
+			s:    "1::",
+			want: true,
+		},
+		{
+			name: "ipv6",
+			s:    "fe80:3::1ff:fe23:4567:890a",
+			want: true,
+		},
+		{
+			name: "ipv6-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]",
+			want: false,
+		},
 
-		{"ipv4-range-1", "192.168.0.1/32", false},
-		{"ipv4-range-254", "192.168.0.1/24", false},
-		{"ipv4-range-4294967294", "192.168.0.1/0", false},
-		{"ipv4-range-2147483646", "192.168.0.1/1", false},
-		{"ipv6-range-20282409603651670423947251286016", "1::/24", false},
-		{"ipv6-range-20282409603651670423947251286016", "fe80:3::1ff:fe23:4567:890a/24", false},
-		{"ipv6-range-20282409603651670423947251286016-embraced", "[fe80:3::1ff:fe23:4567:890a]/24", false},
+		{
+			name: "ipv4-range-1",
+			s:    "192.168.0.1/32",
+			want: false,
+		},
+		{
+			name: "ipv4-range-254",
+			s:    "192.168.0.1/24",
+			want: false,
+		},
+		{
+			name: "ipv4-range-4294967294",
+			s:    "192.168.0.1/0",
+			want: false,
+		},
+		{
+			name: "ipv4-range-2147483646",
+			s:    "192.168.0.1/1",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016",
+			s:    "1::/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-2",
+			s:    "fe80:3::1ff:fe23:4567:890a/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]/24",
+			want: false,
+		},
 
-		{"domain-tld", "domain.tld", false},
-		{"domain-root", "domain", false},
+		{
+			name: "domain-tld",
+			s:    "domain.tld",
+			want: false,
+		},
+		{
+			name: "domain-root",
+			s:    "domain",
+			want: false,
+		},
 
-		{"ipv4-with-port", "123.123.123.123:443", false},
-		{"ipv6-with-port", "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443", false},
-		{"domain-with-port", "domain.tld:443", false},
+		{
+			name: "ipv4-with-port",
+			s:    "123.123.123.123:443",
+			want: false,
+		},
+		{
+			name: "ipv6-with-port",
+			s:    "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443",
+			want: false,
+		},
+		{
+			name: "domain-with-port",
+			s:    "domain.tld:443",
+			want: false,
+		},
 
-		{"grabage", "in valid", false},
+		{
+			name: "grabage",
+			s:    "in valid",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -240,6 +626,7 @@ func TestIsValidIpV6(t *testing.T) {
 	}
 }
 
+// TestIsValidIpRange verifies that IsValidIpRange accepts valid CIDR ranges and rejects bare IPs, hostnames, and addresses with ports.
 func TestIsValidIpRange(t *testing.T) {
 
 	// Prepare and run test cases
@@ -248,30 +635,106 @@ func TestIsValidIpRange(t *testing.T) {
 		s    string
 		want bool
 	}{
-		{"ipv4-localhost", "127.0.0.1", false},
-		{"ipv4-1", "8.8.8.8", false},
-		{"ipv4-2", "123.123.123.123", false},
+		{
+			name: "ipv4-localhost",
+			s:    "127.0.0.1",
+			want: false,
+		},
+		{
+			name: "ipv4-1",
+			s:    "8.8.8.8",
+			want: false,
+		},
+		{
+			name: "ipv4-2",
+			s:    "123.123.123.123",
+			want: false,
+		},
 
-		{"ipv6-localhost", "1::", false},
-		{"ipv6", "fe80:3::1ff:fe23:4567:890a", false},
-		{"ipv6-embraced", "[fe80:3::1ff:fe23:4567:890a]", false},
+		{
+			name: "ipv6-localhost",
+			s:    "1::",
+			want: false,
+		},
+		{
+			name: "ipv6",
+			s:    "fe80:3::1ff:fe23:4567:890a",
+			want: false,
+		},
+		{
+			name: "ipv6-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]",
+			want: false,
+		},
 
-		{"ipv4-range-1", "192.168.0.1/32", true},
-		{"ipv4-range-254", "192.168.0.1/24", true},
-		{"ipv4-range-4294967294", "192.168.0.1/0", true},
-		{"ipv4-range-2147483646", "192.168.0.1/1", true},
-		{"ipv6-range-20282409603651670423947251286016", "1::/24", true},
-		{"ipv6-range-20282409603651670423947251286016", "fe80:3::1ff:fe23:4567:890a/24", true},
-		{"ipv6-range-20282409603651670423947251286016-embraced", "[fe80:3::1ff:fe23:4567:890a]/24", false},
+		{
+			name: "ipv4-range-1",
+			s:    "192.168.0.1/32",
+			want: true,
+		},
+		{
+			name: "ipv4-range-254",
+			s:    "192.168.0.1/24",
+			want: true,
+		},
+		{
+			name: "ipv4-range-4294967294",
+			s:    "192.168.0.1/0",
+			want: true,
+		},
+		{
+			name: "ipv4-range-2147483646",
+			s:    "192.168.0.1/1",
+			want: true,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016",
+			s:    "1::/24",
+			want: true,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-2",
+			s:    "fe80:3::1ff:fe23:4567:890a/24",
+			want: true,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]/24",
+			want: false,
+		},
 
-		{"domain-tld", "domain.tld", false},
-		{"domain-root", "domain", false},
+		{
+			name: "domain-tld",
+			s:    "domain.tld",
+			want: false,
+		},
+		{
+			name: "domain-root",
+			s:    "domain",
+			want: false,
+		},
 
-		{"ipv4-with-port", "123.123.123.123:443", false},
-		{"ipv6-with-port", "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443", false},
-		{"domain-with-port", "domain.tld:443", false},
+		{
+			name: "ipv4-with-port",
+			s:    "123.123.123.123:443",
+			want: false,
+		},
+		{
+			name: "ipv6-with-port",
+			s:    "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443",
+			want: false,
+		},
+		{
+			name: "domain-with-port",
+			s:    "domain.tld:443",
+			want: false,
+		},
 
-		{"grabage", "in valid", false},
+		{
+			name: "grabage",
+			s:    "in valid",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -282,6 +745,7 @@ func TestIsValidIpRange(t *testing.T) {
 	}
 }
 
+// TestIsValidTarget verifies that IsValidAddress accepts valid IPs and hostnames while rejecting ranges, ports, and malformed input.
 func TestIsValidTarget(t *testing.T) {
 
 	// Prepare and run test cases
@@ -290,30 +754,106 @@ func TestIsValidTarget(t *testing.T) {
 		s    string
 		want bool
 	}{
-		{"ipv4-localhost", "127.0.0.1", true},
-		{"ipv4-1", "8.8.8.8", true},
-		{"ipv4-2", "123.123.123.123", true},
+		{
+			name: "ipv4-localhost",
+			s:    "127.0.0.1",
+			want: true,
+		},
+		{
+			name: "ipv4-1",
+			s:    "8.8.8.8",
+			want: true,
+		},
+		{
+			name: "ipv4-2",
+			s:    "123.123.123.123",
+			want: true,
+		},
 
-		{"ipv6-localhost", "1::", true},
-		{"ipv6", "fe80:3::1ff:fe23:4567:890a", true},
-		{"ipv6-embraced", "[fe80:3::1ff:fe23:4567:890a]", false},
+		{
+			name: "ipv6-localhost",
+			s:    "1::",
+			want: true,
+		},
+		{
+			name: "ipv6",
+			s:    "fe80:3::1ff:fe23:4567:890a",
+			want: true,
+		},
+		{
+			name: "ipv6-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]",
+			want: false,
+		},
 
-		{"ipv4-range-1", "192.168.0.1/32", false},
-		{"ipv4-range-254", "192.168.0.1/24", false},
-		{"ipv4-range-4294967294", "192.168.0.1/0", false},
-		{"ipv4-range-2147483646", "192.168.0.1/1", false},
-		{"ipv6-range-20282409603651670423947251286016", "1::/24", false},
-		{"ipv6-range-20282409603651670423947251286016", "fe80:3::1ff:fe23:4567:890a/24", false},
-		{"ipv6-range-20282409603651670423947251286016-embraced", "[fe80:3::1ff:fe23:4567:890a]/24", false},
+		{
+			name: "ipv4-range-1",
+			s:    "192.168.0.1/32",
+			want: false,
+		},
+		{
+			name: "ipv4-range-254",
+			s:    "192.168.0.1/24",
+			want: false,
+		},
+		{
+			name: "ipv4-range-4294967294",
+			s:    "192.168.0.1/0",
+			want: false,
+		},
+		{
+			name: "ipv4-range-2147483646",
+			s:    "192.168.0.1/1",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016",
+			s:    "1::/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-2",
+			s:    "fe80:3::1ff:fe23:4567:890a/24",
+			want: false,
+		},
+		{
+			name: "ipv6-range-20282409603651670423947251286016-embraced",
+			s:    "[fe80:3::1ff:fe23:4567:890a]/24",
+			want: false,
+		},
 
-		{"domain-tld", "domain.tld", true},
-		{"domain-root", "domain", true},
+		{
+			name: "domain-tld",
+			s:    "domain.tld",
+			want: true,
+		},
+		{
+			name: "domain-root",
+			s:    "domain",
+			want: true,
+		},
 
-		{"ipv4-with-port", "123.123.123.123:443", false},
-		{"ipv6-with-port", "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443", false},
-		{"domain-with-port", "domain.tld:443", false},
+		{
+			name: "ipv4-with-port",
+			s:    "123.123.123.123:443",
+			want: false,
+		},
+		{
+			name: "ipv6-with-port",
+			s:    "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443",
+			want: false,
+		},
+		{
+			name: "domain-with-port",
+			s:    "domain.tld:443",
+			want: false,
+		},
 
-		{"grabage", "in valid", false},
+		{
+			name: "grabage",
+			s:    "in valid",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

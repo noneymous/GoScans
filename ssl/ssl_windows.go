@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2021.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -13,8 +13,10 @@ package ssl
 import (
 	"bytes"
 	"fmt"
-	"github.com/siemens/GoScans/utils"
 	"os/exec"
+	"strings"
+
+	"github.com/siemens/GoScans/utils"
 )
 
 // NewScanner initializes a new SSLyze scan. Windows specific implementation, SSLyze executable path required
@@ -29,6 +31,9 @@ func NewScanner(
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer
+
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
 
 	// Check whether we can execute the SSLyze library and retrieve the help message
 	args := []string{"--help"}

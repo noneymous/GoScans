@@ -1,24 +1,27 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package webcrawler implements a scan module for crawling web applications and enumerating content.
 package webcrawler
 
 import (
+	"context"
 	"fmt"
-	"github.com/siemens/GoScans/utils"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/siemens/GoScans/utils"
 )
 
 const Label = "Webcrawler"
@@ -60,7 +63,7 @@ type hrefInfo struct {
 type nilInfoErr struct{}
 
 func (e *nilInfoErr) Error() string {
-	return fmt.Sprintf("received info is nil")
+	return "received info is nil"
 }
 
 type Scanner struct {
@@ -85,11 +88,13 @@ type Scanner struct {
 	proxy          *url.URL
 	followTypes    []string
 	downloadTypes  []string
-	deadline       time.Time // Time when the scanner has to abort
 	requestTimeout time.Duration
 
 	running           bool                              // follow/download response content types can only be updated until running
 	knownFingerprints map[string]*utils.HttpFingerprint // Fingerprints are used to detect redundant responses with different vhosts
+
+	contextInner       context.Context    // Context for the scan, within which the scan should execute. Might optionally wrap an outer context. If outer context is cancelled, inner one should cancel too, but not the other way around.
+	contextInnerCancel context.CancelFunc // Context cancel function of inner context, not impacting optional outer one.
 }
 
 func NewScanner(
@@ -111,6 +116,9 @@ func NewScanner(
 	proxy string,
 	requestTimeout time.Duration,
 ) (*Scanner, error) {
+
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
 
 	// Check whether input target is valid
 	if !utils.IsValidAddress(target) {
@@ -165,7 +173,7 @@ func NewScanner(
 		time.Time{}, // zero time
 		time.Time{}, // zero time
 		logger,
-		strings.TrimSpace(target), // Address to be scanned (might be IPv4, IPv6 or hostname)
+		target, // Address to be scanned (might be IPv4, IPv6 or hostname)
 		port,
 		vhosts,
 		https,
@@ -182,14 +190,24 @@ func NewScanner(
 		proxyUrl,
 		DefaultFollowContentTypes,
 		DefaultDownloadContentTypes,
-		time.Time{}, // zero time (no deadline yet set)
 		requestTimeout,
 		false,
 		make(map[string]*utils.HttpFingerprint),
+		nil,
+		nil,
 	}
 
 	// Return scan struct
 	return &scan, nil
+}
+
+// SetContext can be used to pass an existing context from outside.
+// If timeout is supplied later when calling Run() the external context and the deadline context will be combined.
+// Once set, the context cannot be changed anymore, because it might have been wrapped internally already.
+func (s *Scanner) SetContext(ctx context.Context) {
+	if s.contextInner == nil {
+		s.contextInner = ctx
+	}
 }
 
 // SetFollowContentTypes allows to set a custom none-default list of response content types to be followed during
@@ -238,14 +256,29 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 		}
 	}()
 
-	// Set scan started flag and calculate deadline
+	// Set scan started flag
 	s.Started = time.Now()
-	if timeout > 0 {
-		s.deadline = time.Now().Add(timeout)
+
+	// Create initial context
+	contextInner := context.Background()
+
+	// Replace context with external one if set
+	if s.contextInner != nil {
+		contextInner = s.contextInner
 	}
-	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
+
+	// Add timeout to context if desired
+	var contextInnerCancel context.CancelFunc
+	if timeout > 0 {
+		contextInner, contextInnerCancel = context.WithTimeout(contextInner, timeout)
+	}
+
+	// Set context for scan
+	s.contextInner = contextInner
+	s.contextInnerCancel = contextInnerCancel
 
 	// Execute scan logic
+	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
 	res = s.execute()
 
 	// Log scan completion message
@@ -258,6 +291,11 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 }
 
 func (s *Scanner) execute() *Result {
+
+	// Cleanup inner context if set
+	if s.contextInnerCancel != nil {
+		defer s.contextInnerCancel()
+	}
 
 	// Declare result variable to be returned
 	var results []*CrawlResult
@@ -429,7 +467,7 @@ func (s *Scanner) execute() *Result {
 			s.followTypes,
 			s.downloadTypes,
 			s.maxThreads,
-			s.deadline,
+			s.contextInner,
 		)
 		if errNew != nil {
 			s.logger.Debugf("Initializing crawler failed.")
@@ -489,7 +527,7 @@ func (s *Scanner) execute() *Result {
 		vHostsCompleted = append(vHostsCompleted, currentVhost)
 
 		// Check whether scan timeout is reached
-		if utils.DeadlineReached(s.deadline) {
+		if utils.ContextExpired(s.contextInner) {
 			s.logger.Debugf("Scan ran into timeout.")
 
 			// Log outstanding work
@@ -597,7 +635,7 @@ func appendHrefsWorker(
 			case <-stopCh:
 				// Return so the routine can terminate
 				return
-			case _ = <-infoQueue:
+			case <-infoQueue:
 			default:
 				time.Sleep(time.Millisecond * 10)
 			}

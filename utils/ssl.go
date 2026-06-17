@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -60,8 +60,8 @@ func InsecureTlsConfigFactory() *tls.Config {
 	// Return insecure TLS config
 	return &tls.Config{
 		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionSSL30, // If zero, TLS 1.0 is currently taken by the TLS package as the minimum.
-		MaxVersion:         tls.VersionTLS12, // If zero, the maximum version supported by the TLS package is used
+		MinVersion:         tls.VersionSSL30, //lint:ignore SA1019 needed to advertise SSLv3 support during security scans
+		MaxVersion:         tls.VersionTLS13, // If zero, the maximum version supported by the TLS package is used
 		CipherSuites:       ciphers,
 	}
 }

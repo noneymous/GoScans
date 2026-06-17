@@ -12,11 +12,15 @@ package ssl
 
 import (
 	"fmt"
-	"github.com/cockroachdb/apd"
-	"github.com/siemens/GoScans/utils"
 	"math"
 	"sync"
+
+	"github.com/cockroachdb/apd/v3"
+	"github.com/siemens/GoScans/utils"
 )
+
+// errInit holds the original error if initialization failed on the first call
+var errInit error
 
 // DO NOT alter!
 // Some of the most common key lengths mapping to their strength when using the GNFS.
@@ -46,7 +50,7 @@ var (
 
 const acceptableConditions = apd.Inexact | apd.Rounded
 
-func initGnfsComplexity(c apd.Context) (err error) {
+func initGnfsComplexity(c *apd.Context) (err error) {
 
 	two = apd.New(2, 0)
 
@@ -93,23 +97,21 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// Init the context and it's precision.
-	c := apd.BaseContext
-	c.Precision = 7
-
-	var err error
+	c := apd.BaseContext.WithPrecision(7)
 
 	// Wrap the init function in order to handle the errors here.
+
 	wrappedInit := func() {
-		err = initGnfsComplexity(c)
-		if err != nil {
-			err = fmt.Errorf("could not init GNFS constants: %s", err)
+		errInit = initGnfsComplexity(c)
+		if errInit != nil {
+			errInit = fmt.Errorf("could not init GNFS constants: %s", errInit)
 		}
 	}
 
 	// Init the constants if not done yet.
 	once.Do(wrappedInit)
-	if err != nil {
-		return -1, err
+	if errInit != nil {
+		return -1, errInit
 	}
 
 	if !initSuccess {
@@ -129,9 +131,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	z := new(apd.Decimal)
 
 	// 2^length = 1 << length
-	res, err := c.Pow(n, two, l)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute 2^[key size]: %s", err)
+	res, errInit := c.Pow(n, two, l)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute 2^[key size]: %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -140,9 +142,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 
 	// Ln(n)
 	// This is the last step we can safe in n as the second component also needs Ln(2^length)
-	res, err = c.Ln(n, n)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute Ln(n): %s", err)
+	res, errInit = c.Ln(n, n)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute Ln(n): %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -150,9 +152,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// 64 / 9 * x
-	res, err = c.Mul(x, sixtyfournine, n)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute 64 / 9 * x: %s", err)
+	res, errInit = c.Mul(x, sixtyfournine, n)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute 64 / 9 * x: %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -160,9 +162,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// x^(1/3)
-	res, err = c.Pow(x, x, onethird)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute x^(1/3): %s", err)
+	res, errInit = c.Pow(x, x, onethird)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute x^(1/3): %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -171,9 +173,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 
 	// Ln(n)
 	// Yes we need to take the Ln again
-	res, err = c.Ln(y, n)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute Ln(n): %s", err)
+	res, errInit = c.Ln(y, n)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute Ln(n): %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -181,9 +183,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// y^(2/3)
-	res, err = c.Pow(y, y, twothirds)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute y^(2/3): %s", err)
+	res, errInit = c.Pow(y, y, twothirds)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute y^(2/3): %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -191,9 +193,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// x * y
-	res, err = c.Mul(z, x, y)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute x * y: %s", err)
+	res, errInit = c.Mul(z, x, y)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute x * y: %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -201,9 +203,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// exp(z)
-	res, err = c.Exp(z, z)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute Ln(n): %s", err)
+	res, errInit = c.Exp(z, z)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute Ln(n): %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -214,9 +216,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	// We have to do a base change because apd doesn't support log2. (Log10(2) is computed during the initialization.)
 
 	// log10(z)
-	res, err = c.Log10(z, z)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute Log10(z): %s", err)
+	res, errInit = c.Log10(z, z)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute Log10(z): %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -224,9 +226,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// log2(z) = log10(z) / log10(2)
-	res, err = c.Quo(z, z, log10two)
-	if err != nil {
-		return -1., fmt.Errorf("can not compute Log2(z): %s", err)
+	res, errInit = c.Quo(z, z, log10two)
+	if errInit != nil {
+		return -1., fmt.Errorf("can not compute Log2(z): %s", errInit)
 	}
 
 	if errCond := checkConditions(res); errCond != nil {
@@ -234,9 +236,9 @@ func gnfsComplexity(length uint64) (float64, error) {
 	}
 
 	// Get the float64 value and return it.
-	ret, err := z.Float64()
-	if err != nil {
-		return -1., fmt.Errorf("can not get the result's float value: %s", err)
+	ret, errInit := z.Float64()
+	if errInit != nil {
+		return -1., fmt.Errorf("can not get the result's float value: %s", errInit)
 	}
 
 	return ret, nil

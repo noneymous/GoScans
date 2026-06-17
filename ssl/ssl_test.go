@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,13 +11,71 @@
 package ssl
 
 import (
-	"fmt"
-	"github.com/siemens/GoScans/_test"
-	"github.com/siemens/GoScans/utils"
+	"context"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/siemens/GoScans/_test"
+	"github.com/siemens/GoScans/utils"
 )
 
+// TestMain initializes the test environment and runs all tests in the ssl package.
+func TestMain(m *testing.M) {
+
+	// Retrieve test settings
+	_test.GetSettings()
+
+	// Prepare test directory
+	tmpDir, errTmp := os.MkdirTemp(".", "goscans-ssl-test-*")
+	if errTmp != nil {
+		panic(errTmp)
+	}
+	if errChdir := os.Chdir(tmpDir); errChdir != nil {
+		panic(errChdir)
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Prepare cleanup
+	_ = os.Chdir("..")
+	_ = os.RemoveAll(tmpDir)
+
+	// Return nil as everything went fine
+	os.Exit(code)
+}
+
+// TestScanner_SetContext_SetsOnFirstCallOnly verifies that SetContext only accepts the first context and ignores subsequent ones.
+func TestScanner_SetContext_SetsOnFirstCallOnly(t *testing.T) {
+
+	// Prepare scanner with minimum required fields
+	s := &Scanner{
+		logger: utils.NewTestLogger(),
+	}
+
+	// Set initial context
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	s.SetContext(ctx1)
+
+	// Verify context was set
+	if s.contextInner != ctx1 {
+		t.Errorf("SetContext() contextInner = '%v', want = '%v'", s.contextInner, ctx1)
+	}
+
+	// Set second context, which should be ignored
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	s.SetContext(ctx2)
+
+	// Verify context was not replaced
+	if s.contextInner != ctx1 {
+		t.Errorf("SetContext() contextInner = '%v', want = '%v' (should not have changed)", s.contextInner, ctx1)
+	}
+}
+
+// TestScanner_LoadCiphers verifies that LoadCiphers populates the cipher mapping without errors.
 func TestScanner_LoadCiphers(t *testing.T) {
 
 	// Prepare test variables
@@ -27,6 +85,7 @@ func TestScanner_LoadCiphers(t *testing.T) {
 	LoadCiphers(testLogger)
 }
 
+// TestScanner_DuplicateCiphers verifies that only known allowed duplicate OpenSSL cipher names exist in the cipher mapping.
 func TestScanner_DuplicateCiphers(t *testing.T) {
 
 	// Prepare test variables
@@ -56,24 +115,84 @@ func TestScanner_DuplicateCiphers(t *testing.T) {
 	}
 }
 
-// An assertion function to be used in testing
-func assertEqual(t *testing.T, a interface{}, b interface{}, message string) {
-	if a == b {
-		return
+// TestParseSslyzeVersion verifies that parseSslyzeVersion correctly extracts the version from SSLyze help output.
+func TestParseSslyzeVersion(t *testing.T) {
+
+	// Prepare and run test cases
+	tests := []struct {
+		name      string
+		input     string
+		wantErr   bool
+		wantMajor int
+		wantMinor int
+		wantPatch int
+	}{
+		{
+			name:      "valid-5-0-0",
+			input:     "SSLyze version 5.0.0\npositional arguments",
+			wantErr:   false,
+			wantMajor: 5,
+			wantMinor: 0,
+			wantPatch: 0,
+		},
+		{
+			name:      "valid-5-1-2",
+			input:     "SSLyze version 5.1.2\npositional arguments\nsome more text",
+			wantErr:   false,
+			wantMajor: 5,
+			wantMinor: 1,
+			wantPatch: 2,
+		},
+		{
+			name:    "missing-version-prefix",
+			input:   "No version information here\npositional arguments",
+			wantErr: true,
+		},
+		{
+			name:    "missing-arguments-suffix",
+			input:   "SSLyze version 5.0.0\nno arguments suffix here",
+			wantErr: true,
+		},
+		{
+			name:    "empty-input",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "invalid-version-format",
+			input:   "SSLyze version invalid\npositional arguments",
+			wantErr: true,
+		},
 	}
-	if len(message) == 0 {
-		message = fmt.Sprintf("%v != %v", a, b)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			version, errParse := parseSslyzeVersion(tt.input)
+			if (errParse != nil) != tt.wantErr {
+				t.Errorf("parseSslyzeVersion() error = '%v', wantErr = '%v'", errParse, tt.wantErr)
+				return
+			}
+			if !tt.wantErr {
+				if version.Major != tt.wantMajor {
+					t.Errorf("parseSslyzeVersion() Major = '%v', want = '%v'", version.Major, tt.wantMajor)
+				}
+				if version.Minor != tt.wantMinor {
+					t.Errorf("parseSslyzeVersion() Minor = '%v', want = '%v'", version.Minor, tt.wantMinor)
+				}
+				if version.Patch != tt.wantPatch {
+					t.Errorf("parseSslyzeVersion() Patch = '%v', want = '%v'", version.Patch, tt.wantPatch)
+				}
+			}
+		})
 	}
-	t.Fatal(message)
 }
 
-// TestScanner_Results tests the results of a scan against some expected results
+// TestScanner_Results verifies that a live SSL scan returns expected compliance, vulnerability, and curve results.
 func TestScanner_Results(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
+	testSettings := _test.GetSettings()
+	if testSettings.PathSslyze == "" {
+		t.Skip("Integration test skipped: PathSslyze not configured in _test/settings.go")
 		return
 	}
 
@@ -99,17 +218,31 @@ func TestScanner_Results(t *testing.T) {
 		args            args
 		expectedResults scanResults
 	}{
-		{"www.mozilla.org", args{"www.mozilla.org", 443, nil, testSettings.PathSslyze, ""},
-			scanResults{"Completed", false, false, 3}},
+		{
+			name: "www.mozilla.org",
+			args: args{
+				target:           "www.mozilla.org",
+				port:             443,
+				vhosts:           nil,
+				sslyzePath:       testSettings.PathSslyze,
+				customTruststore: "",
+			},
+			expectedResults: scanResults{
+				Status:         "Completed",
+				IsCompliant:    false,
+				VulnHeartBleed: false,
+				NumSupportedEC: 3,
+			},
+		},
 	}
 
 	// Run test scans
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			scanner, err := NewScanner(testLogger, tt.args.sslyzePath, tt.args.customTruststore, tt.args.target,
+			scanner, errNew := NewScanner(testLogger, tt.args.sslyzePath, tt.args.customTruststore, tt.args.target,
 				tt.args.port, tt.args.vhosts)
-			if err != nil {
-				t.Errorf("Cannot initilize Scanner for %s: %s", tt.name, err)
+			if errNew != nil {
+				t.Errorf("NewScanner() error = '%v', want = 'nil'", errNew)
 				return
 			}
 
@@ -119,14 +252,22 @@ func TestScanner_Results(t *testing.T) {
 			// Run scan
 			result := scanner.Run(timeout)
 
-			// Test asserts
-			assertEqual(t, result.Status, tt.expectedResults.Status, fmt.Sprintf("Scan not completed for %s", tt.name))
-			assertEqual(t, result.Data[0].Settings.IsCompliantToMozillaConfig,
-				tt.expectedResults.IsCompliant, fmt.Sprintf("Wrong results for Mozilla's compliance check for %s", tt.name))
-			assertEqual(t, result.Data[0].Issues.Heartbleed,
-				tt.expectedResults.VulnHeartBleed, fmt.Sprintf("Wrong results for Heartbleed check for %s", tt.name))
-			assertEqual(t, len(result.Data[0].Curves.SupportedCurves),
-				tt.expectedResults.NumSupportedEC, fmt.Sprintf("Wrong results for the number of supported elliptic curves for %s", tt.name))
+			// Verify scan results
+			if result.Status != tt.expectedResults.Status {
+				t.Errorf("Result.Status = '%v', want = '%v'", result.Status, tt.expectedResults.Status)
+			}
+			if result.Data[0].Settings.IsCompliantToMozillaConfig != tt.expectedResults.IsCompliant {
+				t.Errorf("Result.Data[0].Settings.IsCompliantToMozillaConfig = '%v', want = '%v'",
+					result.Data[0].Settings.IsCompliantToMozillaConfig, tt.expectedResults.IsCompliant)
+			}
+			if result.Data[0].Issues.Heartbleed != tt.expectedResults.VulnHeartBleed {
+				t.Errorf("Result.Data[0].Issues.Heartbleed = '%v', want = '%v'",
+					result.Data[0].Issues.Heartbleed, tt.expectedResults.VulnHeartBleed)
+			}
+			if len(result.Data[0].Curves.SupportedCurves) != tt.expectedResults.NumSupportedEC {
+				t.Errorf("len(Result.Data[0].Curves.SupportedCurves) = '%v', want = '%v'",
+					len(result.Data[0].Curves.SupportedCurves), tt.expectedResults.NumSupportedEC)
+			}
 		})
 	}
 }

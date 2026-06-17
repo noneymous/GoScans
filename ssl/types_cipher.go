@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -17,7 +17,7 @@ import (
 // Before changing this command read the comment in types.go
 //go:generate stringer -linecomment -output=types_cipher_string.go -type=Protocol,Encryption,EncryptionMode,Authentication,KeyExchange,Mac,Prf ./
 
-// Struct used for our cipher suite mapping.
+// CipherInfo holds cipher suite details for our mapping.
 type CipherInfo struct {
 	Id          string         `json:"cipher_suite"` // Cipher suite id
 	OpensslName string         `json:"openssl_name"` // OpenSSL name of the cipher (SSLyze uses it)
@@ -54,7 +54,7 @@ func IsValidProtocol(p Protocol) bool {
 	return p > 0 && p <= Tlsv1_3
 }
 
-// Algorithms used for the key exchange.
+// KeyExchange represents algorithms used for the key exchange.
 type KeyExchange uint8
 
 // KEX_ECMQV: https://tools.ietf.org/html/draft-campagna-tls-ecmqv-ecqv-01
@@ -108,7 +108,7 @@ func (k KeyExchange) getStrength(size uint64) (float64, error) {
 	}
 }
 
-// Algorithms used to authenticate the server and (optionally) client.
+// Authentication represents algorithms used to authenticate the server and optionally client.
 type Authentication uint8
 
 // AUTH_GOSTR341001: elliptic curve version
@@ -207,7 +207,7 @@ func (e Encryption) getStrength(keySize int) int {
 	return keySize
 }
 
-// Modes of operation for block ciphers.
+// EncryptionMode represents modes of operation for block ciphers.
 type EncryptionMode uint8
 
 // CNT mode for GOST ciphers, see https://tools.ietf.org/html/rfc5830#page-6
@@ -225,7 +225,7 @@ func IsValidEncryptionMode(encMode EncryptionMode) bool {
 	return encMode > 0 && encMode <= ENC_M_CNT
 }
 
-// Hash algorithms
+// Mac represents hash algorithms used for message authentication codes.
 type Mac uint8
 
 const (
@@ -275,7 +275,7 @@ func (m Mac) getHmacStrength() int {
 	return m.getDigestSize()
 }
 
-// Hash algorithms
+// Prf represents hash algorithms used as pseudo-random functions.
 type Prf uint8
 
 const (

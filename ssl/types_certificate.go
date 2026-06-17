@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -13,6 +13,7 @@ package ssl
 import (
 	"crypto/x509"
 	"fmt"
+
 	"github.com/siemens/GoScans/utils"
 )
 
@@ -117,7 +118,7 @@ func makeSignatureAlgorithmFromX509(logger utils.Logger, alg x509.SignatureAlgor
 	}
 }
 
-// Signature hash algorithms
+// SignatureHash represents a signature hash algorithm.
 type SignatureHash uint8
 
 // BLAKE2*: has a variable digest size, 512 is the maximum.
@@ -188,6 +189,8 @@ func makeSignatureHashFromX509(logger utils.Logger, alg x509.SignatureAlgorithm)
 
 // GetDigestSize returns the digest size. In the case of Blake2* the digest size is variable and the maximum of 512 is
 // returned. The digest size is also used as the hmac strength.
+//
+//lint:ignore U1000 retained for symmetry with cipher strength methods; not yet wired into report output
 func (h SignatureHash) getDigestSize() int {
 
 	switch h {
@@ -209,11 +212,13 @@ func (h SignatureHash) getDigestSize() int {
 }
 
 // GetStrength returns the strength of the hash.
+//
+//lint:ignore U1000 retained for symmetry with cipher strength methods; not yet wired into report output
 func (h SignatureHash) getStrength() int {
 	return h.getDigestSize() / 2
 }
 
-// Curves used for elliptic curve cryptography (ECDHE, ECDSA).
+// Curve represents an elliptic curve used in TLS for key exchange and authentication (ECDHE, ECDSA).
 // see http://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-8
 // This custom type is not transformed to an integer type as we only have one significant method declared for it and we
 // only get a string from SSLyze. Therefore we'd have to create a mapping to our type in order to use a integer
@@ -287,7 +292,7 @@ func makeCurve(logger utils.Logger, cv string) Curve {
 	}
 }
 
-// We have to create our own String() function, as the Curve is a string alias and stringer can't process those.
+// String returns the string representation of the Curve.
 func (c Curve) String() string {
 
 	switch c {
@@ -305,6 +310,8 @@ func (c Curve) String() string {
 }
 
 // GetPrimeFieldSize returns prime field size of the given curve.
+//
+//lint:ignore U1000 retained for symmetry with cipher strength methods; not yet wired into report output
 func (c Curve) getPrimeFieldSize() int {
 
 	switch c {
@@ -342,6 +349,8 @@ func (c Curve) getPrimeFieldSize() int {
 }
 
 // GetStrength returns the computed strength. The second return value signalizes whether the fieldSize is 0.
+//
+//lint:ignore U1000 retained for symmetry with cipher strength methods; not yet wired into report output
 func (c Curve) getStrength() float64 {
 	return float64(c.getPrimeFieldSize()) / 2.
 }

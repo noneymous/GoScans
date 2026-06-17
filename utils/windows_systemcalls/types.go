@@ -1,13 +1,17 @@
+//go:build windows
+
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package windows_systemcalls provides Windows-specific system-call wrappers and type definitions
+// used by GoScans modules (SMB, shell32 property store, NetAPI32, MPR).
 package windows_systemcalls
 
 import "github.com/go-ole/go-ole"

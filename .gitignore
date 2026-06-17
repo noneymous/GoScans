@@ -1,14 +1,15 @@
 # Goland (developer-specific stuff)
-.idea/workspace.xml
-.idea/dataSources.xml
+/.idea/workspace.xml
+/.idea/dataSources.xml
 
 # Unit test output
-_test/tmp/
-_test/tools/*
+/_test/tmp/
+/_test/tools/*
+/_test/download_urls.csv
 
 # Compiled executables
-_test/*.exe
-_test/*.bin
+/_test/*.exe
+/_test/*.bin
 
 # Log files, no matter where
 *.log

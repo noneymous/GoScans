@@ -1,23 +1,25 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package netapi wraps the Windows NetAPI32 NetLocalGroupGetMembers call to enumerate local group members.
 package netapi
 
 import (
 	"fmt"
-	"github.com/siemens/GoScans/utils"
-	"golang.org/x/sys/windows"
 	"strings"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
+
+	"github.com/siemens/GoScans/utils"
+	"golang.org/x/sys/windows"
 )
 
 const maxPreferredLength uint32 = 0xFFFFFFFF // This will let the netapi function allocate the needed memory
@@ -66,7 +68,7 @@ func GetGroupInfo(logger utils.Logger, target, sidString string) ([]string, erro
 		entriesRead  uint32
 		entriesTotal uint32
 
-		users = make([]string, 0, 0)
+		users = make([]string, 0)
 	)
 
 	// Encode the server name in UTF-16 and get a pointer to it

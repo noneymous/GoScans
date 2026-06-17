@@ -1,11 +1,22 @@
+/*
+* GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
+*
+* Copyright (c) Siemens AG, 2016-2026.
+*
+* This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
+* directory or visit <https://opensource.org/licenses/MIT>.
+*
+ */
+
 package windows_systemcalls
 
 import (
-	"github.com/go-ole/go-ole"
-	"golang.org/x/sys/windows"
 	"reflect"
 	"syscall"
 	"unsafe"
+
+	"github.com/go-ole/go-ole"
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -15,15 +26,13 @@ var (
 
 func SHGetPropertyStoreFromParsingName(pszPath *uint16, pbc *IBindCtx, flags uint32, riid *ole.GUID, obj interface{}) (err error) {
 	objValue := reflect.ValueOf(obj).Elem()
-	r0, _, _ := syscall.Syscall6(
+	r0, _, _ := syscall.SyscallN(
 		procSHGetPropertyStoreFromParsingName.Addr(),
-		5,
 		uintptr(unsafe.Pointer(pszPath)),
 		uintptr(unsafe.Pointer(pbc)),
 		uintptr(flags),
 		uintptr(unsafe.Pointer(riid)),
-		objValue.Addr().Pointer(),
-		0)
+		objValue.Addr().Pointer())
 
 	if r0 != 0 {
 		err = syscall.Errno(r0)
@@ -33,12 +42,10 @@ func SHGetPropertyStoreFromParsingName(pszPath *uint16, pbc *IBindCtx, flags uin
 }
 
 func psGetCount(ps *IPropertyStore, count *uint32) (err error) {
-	hr, _, _ := syscall.Syscall(
+	hr, _, _ := syscall.SyscallN(
 		ps.VTable().GetCount,
-		2,
 		uintptr(unsafe.Pointer(ps)),
-		uintptr(unsafe.Pointer(count)),
-		0)
+		uintptr(unsafe.Pointer(count)))
 	if hr != 0 {
 		err = ole.NewError(hr)
 	}
@@ -46,9 +53,8 @@ func psGetCount(ps *IPropertyStore, count *uint32) (err error) {
 }
 
 func psGetAt(ps *IPropertyStore, iProp uint32, pkey *PROPERTYKEY) (err error) {
-	hr, _, _ := syscall.Syscall(
+	hr, _, _ := syscall.SyscallN(
 		ps.VTable().GetAt,
-		3,
 		uintptr(unsafe.Pointer(ps)),
 		uintptr(iProp),
 		uintptr(unsafe.Pointer(pkey)))
@@ -59,9 +65,8 @@ func psGetAt(ps *IPropertyStore, iProp uint32, pkey *PROPERTYKEY) (err error) {
 }
 
 func psGetValue(ps *IPropertyStore, key *PROPERTYKEY, pv *PROPVARIANT) (err error) {
-	hr, _, _ := syscall.Syscall(
+	hr, _, _ := syscall.SyscallN(
 		ps.VTable().GetValue,
-		3,
 		uintptr(unsafe.Pointer(ps)),
 		uintptr(unsafe.Pointer(key)),
 		uintptr(unsafe.Pointer(pv)))

@@ -1,32 +1,35 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2023.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package filecrawler implements a scan module for crawling and extracting content from file systems and archives.
 package filecrawler
 
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"github.com/gabriel-vasile/mimetype"
-	"github.com/siemens/GoScans/utils"
 	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
+
+	"github.com/gabriel-vasile/mimetype"
+	"github.com/siemens/GoScans/utils"
 )
 
-// The start information of every crawl
+// EntryPoint holds the start information for a crawl.
 type EntryPoint struct {
 	Path      string
 	Share     string // The share in which the object is located
@@ -84,6 +87,11 @@ type task struct {
 // (also the sensitivity-labels of the MS Information Protection) are stored
 const OOXMLCustomPropertiesFile = "docProps/custom.xml"
 
+// maxCustomPropsBytes caps how many bytes are read from docProps/custom.xml into memory. A zip entry can advertise any
+// uncompressed size, so without this cap a crafted archive (zip bomb) could exhaust heap when the entry is read. 10 MiB
+// is many times larger than any legitimate Office custom-properties block.
+const maxCustomPropsBytes = 10 * 1024 * 1024
+
 // OOXMLProperties mirrors the xml structure of custom property metadata of Open Office Files
 type OOXMLProperties struct {
 	XMLName    xml.Name        `xml:"Properties"` // Important when adding attributes, always use uppercase for it, otherwise unmarshalling might not work
@@ -101,7 +109,7 @@ type OOXMLProperty struct {
 	ValFloat *string `xml:"r8"`
 }
 
-// The main crawler struct
+// Crawler is the main file system crawling scanner.
 type Crawler struct {
 	logger                    utils.Logger
 	crawlDepth                int
@@ -109,9 +117,9 @@ type Crawler struct {
 	excludedExtensions        map[string]struct{} // lowercase list of file extensions without '.' to exclude from crawling
 	excludedLastModifiedBelow time.Time
 	excludedFileSizeBelow     int64
-	onlyAccessibleFiles       bool      // Whether to only return files in results that are at least read or writable. Otherwise, also found files that were not accessible are listed.
-	threads                   int       // Amount of threads sending requests in parallel
-	deadline                  time.Time // Time at which the crawler has to abort
+	onlyAccessibleFiles       bool            // Whether to only return files in results that are at least read or writable. Otherwise, also found files that were not accessible are listed.
+	threads                   int             // Amount of threads sending requests in parallel
+	context                   context.Context // Context for the crawling, controllable from outside
 }
 
 func NewCrawler(
@@ -123,7 +131,7 @@ func NewCrawler(
 	excludedFileSizeBelow int64,
 	onlyAccessibleFiles bool,
 	threads int,
-	deadline time.Time,
+	context context.Context,
 ) *Crawler {
 
 	// Make sure at least one crawler thread is set
@@ -139,7 +147,7 @@ func NewCrawler(
 		excludedFileSizeBelow:     excludedFileSizeBelow,
 		onlyAccessibleFiles:       onlyAccessibleFiles,
 		threads:                   threads,
-		deadline:                  deadline,
+		context:                   context,
 	}
 }
 
@@ -190,7 +198,7 @@ func (c *Crawler) Crawl(entryPoint *EntryPoint) *Result {
 	c.run(rootTask, result)
 
 	// Check whether the scan was ended due to the scan timeout
-	if utils.DeadlineReached(c.deadline) {
+	if utils.ContextExpired(c.context) {
 		c.logger.Debugf("Filecrawler finished with timeout.")
 		result.Status = utils.StatusDeadline
 		result.Exception = false
@@ -265,7 +273,7 @@ func (c *Crawler) run(rootTask *task, result *Result) {
 	for {
 
 		// Do not continue feeding the crawler if scan time is reached
-		if utils.DeadlineReached(c.deadline) {
+		if utils.ContextExpired(c.context) {
 			break
 		}
 
@@ -594,11 +602,15 @@ func getOOXMLProperties(filepath string, logger utils.Logger) (*OOXMLProperties,
 		}
 	}()
 
-	// Get all content of the docProps/custom.xml file
+	// Get all content of the docProps/custom.xml file, bounded by maxCustomPropsBytes to prevent a zip-bomb DoS.
+	// Reading maxCustomPropsBytes+1 lets us distinguish "exactly at the cap" from "over the cap" after the copy.
 	buf := &bytes.Buffer{}
-	_, errCopy := io.Copy(buf, customPropsReader)
+	_, errCopy := io.Copy(buf, io.LimitReader(customPropsReader, maxCustomPropsBytes+1))
 	if errCopy != nil {
 		return nil, fmt.Errorf("could not get content of '%s': %s", customPropsXML.Name, errCopy)
+	}
+	if buf.Len() > maxCustomPropsBytes {
+		return nil, fmt.Errorf("'%s' in '%s' exceeds %d-byte limit", customPropsXML.Name, filepath, maxCustomPropsBytes)
 	}
 
 	// Unmarshal XML content of the docProps/custom.xml file

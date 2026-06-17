@@ -11,14 +11,15 @@
 package utils
 
 import (
-	"time"
+	"context"
 )
 
-// DeadlineReached checks whether a given deadline has been reached. Returns false if deadline is zero-time.
-func DeadlineReached(deadline time.Time) bool {
-	if deadline.IsZero() {
+// ContextExpired checks whether a given deadline has been reached. Returns false if deadline is zero-time.
+func ContextExpired(ctx context.Context) bool {
+	if ctx == nil { // No context can't expire
 		return false
-	} else if time.Now().After(deadline) {
+	}
+	if ctx.Err() != nil {
 		return true
 	} else {
 		return false

@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -14,12 +14,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/noneymous/go-redistributable-checker"
-	"github.com/siemens/GoScans/utils"
-	"golang.org/x/sys/windows/registry"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/noneymous/go-redistributable-checker"
+	"github.com/siemens/GoScans/utils"
+	"golang.org/x/sys/windows/registry"
 )
 
 var errNpcapPermission = fmt.Errorf("NPcap is set to admin only")
@@ -225,7 +226,7 @@ func CheckNmapPerformancePatch() error {
 		65534,
 	)
 	if errCheck1 != nil {
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 
 	errCheck2 := CheckRegistryIntValue(
@@ -235,7 +236,7 @@ func CheckNmapPerformancePatch() error {
 		30,
 	)
 	if errCheck2 != nil {
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 
 	errCheck3 := CheckRegistryIntValue(
@@ -245,7 +246,7 @@ func CheckNmapPerformancePatch() error {
 		1,
 	)
 	if errCheck3 != nil {
-		return fmt.Errorf(msg)
+		return fmt.Errorf("%s", msg)
 	}
 
 	// Return nil if everything is fine
@@ -292,7 +293,7 @@ func GetRegistryIntValue(root registry.Key, path, key string) (uint64, error) {
 	return val, nil
 }
 
-// GetRegistryIntValue will try to retrieve the string of the registry entry corresponding to the provided
+// GetRegistryStringValue will try to retrieve the string of the registry entry corresponding to the provided
 // full-path (root + path) and key.
 func GetRegistryStringValue(root registry.Key, path, key string) (string, error) {
 

@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -16,6 +16,7 @@ import (
 	"testing"
 )
 
+// TestRemoveDuplicates verifies that UniqueStrings correctly removes duplicate entries while preserving order and handling nil and empty slices.
 func TestRemoveDuplicates(t *testing.T) {
 
 	// Prepare and run test cases
@@ -24,12 +25,46 @@ func TestRemoveDuplicates(t *testing.T) {
 		elements []string
 		want     []string
 	}{
-		{"duplicates1", []string{"a", "b", "a", "a", "c"}, []string{"a", "b", "c"}},
-		{"duplicates2", []string{"a", "a"}, []string{"a"}},
-		{"duplicates3", []string{"a", "  ", "  ", "c"}, []string{"a", "  ", "c"}},
-		{"no-duplicates1", []string{"a", "b", "c"}, []string{"a", "b", "c"}},
-		{"no-duplicates2", []string{"a", "A", "aA"}, []string{"a", "A", "aA"}},
-		{"no-duplicates3", []string{"a", "  ", "   ", "c"}, []string{"a", "  ", "   ", "c"}},
+		{
+			name:     "duplicates1",
+			elements: []string{"a", "b", "a", "a", "c"},
+			want:     []string{"a", "b", "c"},
+		},
+		{
+			name:     "duplicates2",
+			elements: []string{"a", "a"},
+			want:     []string{"a"},
+		},
+		{
+			name:     "duplicates3",
+			elements: []string{"a", "  ", "  ", "c"},
+			want:     []string{"a", "  ", "c"},
+		},
+		{
+			name:     "no-duplicates1",
+			elements: []string{"a", "b", "c"},
+			want:     []string{"a", "b", "c"},
+		},
+		{
+			name:     "no-duplicates2",
+			elements: []string{"a", "A", "aA"},
+			want:     []string{"a", "A", "aA"},
+		},
+		{
+			name:     "no-duplicates3",
+			elements: []string{"a", "  ", "   ", "c"},
+			want:     []string{"a", "  ", "   ", "c"},
+		},
+		{
+			name:     "empty",
+			elements: []string{},
+			want:     []string{},
+		},
+		{
+			name:     "nil",
+			elements: nil,
+			want:     nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -40,6 +75,7 @@ func TestRemoveDuplicates(t *testing.T) {
 	}
 }
 
+// TestTrimToLower verifies that TrimToLower correctly trims whitespace and converts each string in the slice to lowercase.
 func TestTrimToLower(t *testing.T) {
 
 	// Prepare and run test cases
@@ -48,10 +84,26 @@ func TestTrimToLower(t *testing.T) {
 		slice []string
 		want  []string
 	}{
-		{"all-upper", []string{"A", "B", "C"}, []string{"a", "b", "c"}},
-		{"mixed-upper", []string{"A", "b", "C"}, []string{"a", "b", "c"}},
-		{"mixed-upper-untrimmed1", []string{"A", "b ", "C"}, []string{"a", "b", "c"}},
-		{"mixed-upper-untrimmed2", []string{" A ", "b ", " C"}, []string{"a", "b", "c"}},
+		{
+			name:  "all-upper",
+			slice: []string{"A", "B", "C"},
+			want:  []string{"a", "b", "c"},
+		},
+		{
+			name:  "mixed-upper",
+			slice: []string{"A", "b", "C"},
+			want:  []string{"a", "b", "c"},
+		},
+		{
+			name:  "mixed-upper-untrimmed1",
+			slice: []string{"A", "b ", "C"},
+			want:  []string{"a", "b", "c"},
+		},
+		{
+			name:  "mixed-upper-untrimmed2",
+			slice: []string{" A ", "b ", " C"},
+			want:  []string{"a", "b", "c"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -62,6 +114,7 @@ func TestTrimToLower(t *testing.T) {
 	}
 }
 
+// TestShuffle verifies that Shuffle returns a reordered copy of the input slice that differs from the original order.
 func TestShuffle(t *testing.T) {
 
 	// Prepare and run test cases
@@ -69,8 +122,8 @@ func TestShuffle(t *testing.T) {
 		name    string
 		strings []string
 	}{
-		{"new!=old", []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}},
-		{"new!=old", []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}},
+		{name: "new!=old", strings: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}},
+		{name: "new!=old-2", strings: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,6 +134,7 @@ func TestShuffle(t *testing.T) {
 	}
 }
 
+// TestFilter verifies that Filter correctly retains only the elements that satisfy the provided predicate function.
 func TestFilter(t *testing.T) {
 
 	// Prepare and run test cases
@@ -93,8 +147,22 @@ func TestFilter(t *testing.T) {
 		args args
 		want []string
 	}{
-		{"a-only", args{[]string{"a", "b", "A", "a", "a", "c"}, func(s string) bool { return s == "a" }}, []string{"a", "a", "a"}},
-		{"a-containing", args{[]string{"Anton", "Berta", "Caesar", "Doris", "Esat", "Friedrich"}, func(s string) bool { return strings.Contains(s, "a") }}, []string{"Berta", "Caesar", "Esat"}},
+		{
+			name: "a-only",
+			args: args{
+				input:  []string{"a", "b", "A", "a", "a", "c"},
+				filter: func(s string) bool { return s == "a" },
+			},
+			want: []string{"a", "a", "a"},
+		},
+		{
+			name: "a-containing",
+			args: args{
+				input:  []string{"Anton", "Berta", "Caesar", "Doris", "Esat", "Friedrich"},
+				filter: func(s string) bool { return strings.Contains(s, "a") },
+			},
+			want: []string{"Berta", "Caesar", "Esat"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -105,6 +173,7 @@ func TestFilter(t *testing.T) {
 	}
 }
 
+// TestReverse verifies that Reverse correctly reverses the elements of a slice in-place.
 func TestReverse(t *testing.T) {
 
 	// Prepare and run test cases
@@ -113,7 +182,11 @@ func TestReverse(t *testing.T) {
 		input []string
 		want  []string
 	}{
-		{"valid", []string{"7", "6", "5", "A", "3", "2", "1", "0"}, []string{"0", "1", "2", "3", "A", "5", "6", "7"}},
+		{
+			name:  "valid",
+			input: []string{"7", "6", "5", "A", "3", "2", "1", "0"},
+			want:  []string{"0", "1", "2", "3", "A", "5", "6", "7"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,6 +198,7 @@ func TestReverse(t *testing.T) {
 	}
 }
 
+// TestAlter verifies that Map correctly applies the manipulator function to each element of the input slice.
 func TestAlter(t *testing.T) {
 	manipulatorFunc := func(elem string) string { return "'" + elem + "'" }
 
@@ -138,7 +212,11 @@ func TestAlter(t *testing.T) {
 		args args
 		want []string
 	}{
-		{"sample", args{[]string{"1", "1", "2"}, manipulatorFunc}, []string{"'1'", "'1'", "'2'"}},
+		{
+			name: "sample",
+			args: args{slice: []string{"1", "1", "2"}, manipulator: manipulatorFunc},
+			want: []string{"'1'", "'1'", "'2'"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -149,6 +227,7 @@ func TestAlter(t *testing.T) {
 	}
 }
 
+// TestStrContained verifies that StrContained correctly reports whether a candidate string appears in any of the provided slices.
 func TestStrContained(t *testing.T) {
 
 	// Prepare and run test cases
@@ -161,21 +240,112 @@ func TestStrContained(t *testing.T) {
 		args args
 		want bool
 	}{
-		{"one-slice-contained", args{"test", [][]string{{"a", "b", "c", "test"}}}, true},
-		{"one-slice-not-contained", args{"test", [][]string{{"a", "b", "c", "d"}}}, false},
+		{
+			name: "one-slice-contained",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"a", "b", "c", "test"}},
+			},
+			want: true,
+		},
+		{
+			name: "one-slice-not-contained",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"a", "b", "c", "d"}},
+			},
+			want: false,
+		},
 
-		{"multiple-slices-contained", args{"test", [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "test"}, {"a", "b", "c", "d"}}}, true},
-		{"multiple-slices-not-contained", args{"test", [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "e"}, {"a", "b", "c", "d"}}}, false},
+		{
+			name: "multiple-slices-contained",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "test"}, {"a", "b", "c", "d"}},
+			},
+			want: true,
+		},
+		{
+			name: "multiple-slices-not-contained",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "e"}, {"a", "b", "c", "d"}},
+			},
+			want: false,
+		},
 
-		{"known-1", args{"test1", [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}}}, true},
-		{"known-2", args{"test1", [][]string{{"test1", "test2", "test3"}, {"test1", "test2", "test3"}}}, true},
-		{"known-3", args{"probe1", [][]string{{}, {"probe1", "probe2", "probe3"}}}, true},
-		{"unknown-1", args{"test4", [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}}}, false},
-		{"unknown-2", args{"test", [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}}}, false},
-		{"unknown-3", args{"test", [][]string{{}, {"probe1", "probe2", "probe3"}}}, false},
-		{"unknown-4", args{"test", [][]string{{}, {}}}, false},
-		{"unknown-5", args{"test", [][]string{{}}}, false},
-		{"unknown-6", args{"test", [][]string{}}, false},
+		{
+			name: "known-1",
+			args: args{
+				candidate: "test1",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}},
+			},
+			want: true,
+		},
+		{
+			name: "known-2",
+			args: args{
+				candidate: "test1",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"test1", "test2", "test3"}},
+			},
+			want: true,
+		},
+		{
+			name: "known-3",
+			args: args{
+				candidate: "probe1",
+				slices:    [][]string{{}, {"probe1", "probe2", "probe3"}},
+			},
+			want: true,
+		},
+		{
+			name: "unknown-1",
+			args: args{
+				candidate: "test4",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-2",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-3",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{}, {"probe1", "probe2", "probe3"}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-4",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{}, {}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-5",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-6",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{},
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,6 +356,7 @@ func TestStrContained(t *testing.T) {
 	}
 }
 
+// TestSubstrContained verifies that SubstrContained correctly reports whether any element in the provided slices contains the candidate as a substring.
 func TestSubstrContained(t *testing.T) {
 
 	// Prepare and run test cases
@@ -198,28 +369,106 @@ func TestSubstrContained(t *testing.T) {
 		args args
 		want bool
 	}{
-		{"multiple-slices-contained", args{"test", [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "test"}, {"a", "b", "c", "d"}}}, true},
-		{"multiple-slices-not-contained", args{"test", [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "e"}, {"a", "b", "c", "d"}}}, false},
+		{
+			name: "multiple-slices-contained",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "test"}, {"a", "b", "c", "d"}},
+			},
+			want: true,
+		},
+		{
+			name: "multiple-slices-not-contained",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"a", "b", "c", "d"}, {"a", "b", "c", "d"}, {"a", "b", "c", "e"}, {"a", "b", "c", "d"}},
+			},
+			want: false,
+		},
 
-		{"known-substr-1", args{"obe2", [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}}}, true},
-		{"known-substr-2", args{"test", [][]string{{"test1", "test2", "test3"}, {"test1", "test2", "test3"}}}, true},
-		{"known-substr-3", args{"e2", [][]string{{}, {"probe1", "probe2", "probe3"}}}, true},
-		{"unknown-substr-1", args{"test5", [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}}}, false},
-		{"unknown-substr-2", args{"5", [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}}}, false},
-		{"unknown-substr-3", args{"other", [][]string{{}, {"probe1", "probe2", "probe3"}}}, false},
-		{"unknown-substr-4", args{"other", [][]string{{}, {}}}, false},
-		{"unknown-substr-5", args{"other", [][]string{{}}}, false},
-		{"unknown-substr-6", args{"other", [][]string{}}, false},
+		{
+			name: "known-substr-1",
+			args: args{
+				candidate: "obe2",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}},
+			},
+			want: true,
+		},
+		{
+			name: "known-substr-2",
+			args: args{
+				candidate: "test",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"test1", "test2", "test3"}},
+			},
+			want: true,
+		},
+		{
+			name: "known-substr-3",
+			args: args{
+				candidate: "e2",
+				slices:    [][]string{{}, {"probe1", "probe2", "probe3"}},
+			},
+			want: true,
+		},
+		{
+			name: "unknown-substr-1",
+			args: args{
+				candidate: "test5",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-substr-2",
+			args: args{
+				candidate: "5",
+				slices:    [][]string{{"test1", "test2", "test3"}, {"probe1", "probe2", "probe3"}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-substr-3",
+			args: args{
+				candidate: "other",
+				slices:    [][]string{{}, {"probe1", "probe2", "probe3"}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-substr-4",
+			args: args{
+				candidate: "other",
+				slices:    [][]string{{}, {}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-substr-5",
+			args: args{
+				candidate: "other",
+				slices:    [][]string{{}},
+			},
+			want: false,
+		},
+		{
+			name: "unknown-substr-6",
+			args: args{
+				candidate: "other",
+				slices:    [][]string{},
+			},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := SubstrContained(tt.args.candidate, tt.args.slices...); got != tt.want {
-				t.Errorf("StrContained() = '%v', want = '%v'", got, tt.want)
+				t.Errorf("SubstrContained() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// TestSameElementsSlices verifies that Equals correctly identifies when two slices contain the same elements regardless of order, including nil and empty edge cases.
 func TestSameElementsSlices(t *testing.T) {
 
 	// Prepare and run test cases
@@ -232,28 +481,77 @@ func TestSameElementsSlices(t *testing.T) {
 		args args
 		want bool
 	}{
-		{"both empty", args{[]string{}, []string{}}, true},
-		{"both nil", args{nil, nil}, true},
-		{"same one elem", args{[]string{"ab"}, []string{"ab"}}, true},
-		{"same three elem", args{[]string{"a", "b", "c"}, []string{"a", "b", "c"}}, true},
-		{"same elem diff order", args{[]string{"a", "b", "a"}, []string{"b", "a", "a"}}, true},
-		{"one nil", args{nil, []string{"a"}}, false},
-		{"one nil2", args{[]string{"a"}, nil}, false},
-		{"one nil one empty", args{nil, []string{}}, false},
-		{"diff elem", args{[]string{"a", "b"}, []string{"a", "c"}}, false},
-		{"diff elem2", args{[]string{"a", "a"}, []string{"a", "c"}}, false},
-		{"diff amount", args{[]string{"a"}, []string{"a", "c"}}, false},
-		{"same elem diff amount", args{[]string{"a", "b", "a"}, []string{"a", "b", "b"}}, false},
+		{
+			name: "both-empty",
+			args: args{slice1: []string{}, slice2: []string{}},
+			want: true,
+		},
+		{
+			name: "both-nil",
+			args: args{slice1: nil, slice2: nil},
+			want: true,
+		},
+		{
+			name: "same-one-elem",
+			args: args{slice1: []string{"ab"}, slice2: []string{"ab"}},
+			want: true,
+		},
+		{
+			name: "same-three-elem",
+			args: args{slice1: []string{"a", "b", "c"}, slice2: []string{"a", "b", "c"}},
+			want: true,
+		},
+		{
+			name: "same-elem-diff-order",
+			args: args{slice1: []string{"a", "b", "a"}, slice2: []string{"b", "a", "a"}},
+			want: true,
+		},
+		{
+			name: "one-nil",
+			args: args{slice1: nil, slice2: []string{"a"}},
+			want: false,
+		},
+		{
+			name: "one-nil-2",
+			args: args{slice1: []string{"a"}, slice2: nil},
+			want: false,
+		},
+		{
+			name: "one-nil-one-empty",
+			args: args{slice1: nil, slice2: []string{}},
+			want: false,
+		},
+		{
+			name: "diff-elem",
+			args: args{slice1: []string{"a", "b"}, slice2: []string{"a", "c"}},
+			want: false,
+		},
+		{
+			name: "diff-elem-2",
+			args: args{slice1: []string{"a", "a"}, slice2: []string{"a", "c"}},
+			want: false,
+		},
+		{
+			name: "diff-amount",
+			args: args{slice1: []string{"a"}, slice2: []string{"a", "c"}},
+			want: false,
+		},
+		{
+			name: "same-elem-diff-amount",
+			args: args{slice1: []string{"a", "b", "a"}, slice2: []string{"a", "b", "b"}},
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := Equals(tt.args.slice1, tt.args.slice2); got != tt.want {
-				t.Errorf("EqualSlices() = '%v', want = '%v'", got, tt.want)
+				t.Errorf("Equals() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// TestAppendUnique verifies that AppendUnique correctly appends only elements not already present in the slice, preserving existing duplicates.
 func TestAppendUnique(t *testing.T) {
 
 	// Prepare and run test cases
@@ -266,14 +564,46 @@ func TestAppendUnique(t *testing.T) {
 		args args
 		want []string
 	}{
-		{"empty", args{[]string{}, []string{}}, []string{}},
-		{"all-duplicates", args{[]string{"1", "2", "3"}, []string{"1", "2", "3"}}, []string{"1", "2", "3"}},
-		{"most-duplicates", args{[]string{"1", "2", "3"}, []string{"1", "2", "3", "4"}}, []string{"1", "2", "3", "4"}},
-		{"one-to-one", args{[]string{"1"}, []string{"2"}}, []string{"1", "2"}},
-		{"three-to-none", args{[]string{}, []string{"1", "2", "3"}}, []string{"1", "2", "3"}},
-		{"none-to-three", args{[]string{"1", "2", "3"}, []string{}}, []string{"1", "2", "3"}},
-		{"duplicates-to-none", args{[]string{}, []string{"1", "2", "3", "3", "3"}}, []string{"1", "2", "3"}},
-		{"duplicates-to-duplicates", args{[]string{"1", "1", "1", "1"}, []string{"1", "2", "3", "3", "3"}}, []string{"1", "1", "1", "1", "2", "3"}},
+		{
+			name: "empty",
+			args: args{slice: []string{}, elements: []string{}},
+			want: []string{},
+		},
+		{
+			name: "all-duplicates",
+			args: args{slice: []string{"1", "2", "3"}, elements: []string{"1", "2", "3"}},
+			want: []string{"1", "2", "3"},
+		},
+		{
+			name: "most-duplicates",
+			args: args{slice: []string{"1", "2", "3"}, elements: []string{"1", "2", "3", "4"}},
+			want: []string{"1", "2", "3", "4"},
+		},
+		{
+			name: "one-to-one",
+			args: args{slice: []string{"1"}, elements: []string{"2"}},
+			want: []string{"1", "2"},
+		},
+		{
+			name: "three-to-none",
+			args: args{slice: []string{}, elements: []string{"1", "2", "3"}},
+			want: []string{"1", "2", "3"},
+		},
+		{
+			name: "none-to-three",
+			args: args{slice: []string{"1", "2", "3"}, elements: []string{}},
+			want: []string{"1", "2", "3"},
+		},
+		{
+			name: "duplicates-to-none",
+			args: args{slice: []string{}, elements: []string{"1", "2", "3", "3", "3"}},
+			want: []string{"1", "2", "3"},
+		},
+		{
+			name: "duplicates-to-duplicates",
+			args: args{slice: []string{"1", "1", "1", "1"}, elements: []string{"1", "2", "3", "3", "3"}},
+			want: []string{"1", "1", "1", "1", "2", "3"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -284,6 +614,7 @@ func TestAppendUnique(t *testing.T) {
 	}
 }
 
+// TestRemoveFromSlice verifies that RemoveFromSlice correctly removes all occurrences of the target string from the slice.
 func TestRemoveFromSlice(t *testing.T) {
 
 	// Prepare and run test cases
@@ -296,10 +627,26 @@ func TestRemoveFromSlice(t *testing.T) {
 		args args
 		want []string
 	}{
-		{"empty", args{[]string{}, "3"}, nil},
-		{"no-occurrence", args{[]string{"1", "2"}, "3"}, []string{"1", "2"}},
-		{"one-occurrence", args{[]string{"1", "2", "3"}, "3"}, []string{"1", "2"}},
-		{"multiple-occurrences", args{[]string{"3", "1", "3", "3", "2", "3"}, "3"}, []string{"1", "2"}},
+		{
+			name: "empty",
+			args: args{slice: []string{}, s: "3"},
+			want: nil,
+		},
+		{
+			name: "no-occurrence",
+			args: args{slice: []string{"1", "2"}, s: "3"},
+			want: []string{"1", "2"},
+		},
+		{
+			name: "one-occurrence",
+			args: args{slice: []string{"1", "2", "3"}, s: "3"},
+			want: []string{"1", "2"},
+		},
+		{
+			name: "multiple-occurrences",
+			args: args{slice: []string{"3", "1", "3", "3", "2", "3"}, s: "3"},
+			want: []string{"1", "2"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -310,6 +657,7 @@ func TestRemoveFromSlice(t *testing.T) {
 	}
 }
 
+// TestTitleFirstLetter verifies that TitleFirstLetter correctly capitalizes the first letter of a string while leaving the rest unchanged.
 func TestTitleFirstLetter(t *testing.T) {
 	type args struct {
 		s string
@@ -319,15 +667,31 @@ func TestTitleFirstLetter(t *testing.T) {
 		args args
 		want string
 	}{
-		{"multiple words", args{"this is a sentence."}, "This is a sentence."},
-		{"empty string", args{""}, ""},
-		{"uppercase already", args{"The bear"}, "The bear"},
-		{"one letter", args{"x"}, "X"},
+		{
+			name: "multiple-words",
+			args: args{s: "this is a sentence."},
+			want: "This is a sentence.",
+		},
+		{
+			name: "empty-string",
+			args: args{s: ""},
+			want: "",
+		},
+		{
+			name: "uppercase-already",
+			args: args{s: "The bear"},
+			want: "The bear",
+		},
+		{
+			name: "one-letter",
+			args: args{s: "x"},
+			want: "X",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := TitleFirstLetter(tt.args.s); got != tt.want {
-				t.Errorf("TitleFirstLetter() = %v, want %v", got, tt.want)
+				t.Errorf("TitleFirstLetter() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}

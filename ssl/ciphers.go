@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,9 +11,10 @@
 package ssl
 
 import (
-	"github.com/siemens/GoScans/utils"
 	"strings"
 	"sync"
+
+	"github.com/siemens/GoScans/utils"
 )
 
 // Parsed map of all ciphers from the mapping.
@@ -118,8 +119,8 @@ func loadCiphers(logger utils.Logger) {
 				cipherMapping[cipher.OpensslName] = append(cipherMapping[cipher.OpensslName], cipher)
 
 			} else {
-				// Create a new slice an save the infos
-				cipherMapping[cipher.OpensslName] = make([]Cipher, 1, 1)
+				// Create a new slice and save the infos
+				cipherMapping[cipher.OpensslName] = make([]Cipher, 1)
 				cipherMapping[cipher.OpensslName][0] = cipher
 			}
 		}

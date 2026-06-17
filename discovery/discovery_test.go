@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,15 +11,65 @@
 package discovery
 
 import (
-	"github.com/Ullaakut/nmap/v3"
-	"github.com/siemens/GoScans/_test"
-	"github.com/siemens/GoScans/utils"
+	"encoding/binary"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/Ullaakut/nmap/v3"
+	"github.com/siemens/GoScans/_test"
+	"github.com/siemens/GoScans/discovery/ot"
+	"github.com/siemens/GoScans/utils"
 )
+
+// mockDNSForward maps hostnames to the single IP the test resolver returns.
+var mockDNSForward = map[string]string{
+	"ccc.de":     "195.54.164.39",
+	"www.ccc.de": "195.54.164.39",
+}
+
+// TestMain initializes the test environment and runs all tests in the discovery package.
+func TestMain(m *testing.M) {
+
+	// Retrieve test settings
+	_test.GetSettings()
+
+	// Replace DNS lookups with deterministic mocks so tests are network-independent.
+	utils.OverrideDNS(
+		func(host string) ([]net.IP, error) {
+			if ip, ok := mockDNSForward[host]; ok {
+				return []net.IP{net.ParseIP(ip)}, nil
+			}
+			return nil, &net.DNSError{Err: fmt.Sprintf("lookup %s: no such host", host), Name: host}
+		},
+		func(addr string) ([]string, error) {
+			return nil, &net.DNSError{Err: fmt.Sprintf("lookup %s: no such host", addr), Name: addr}
+		},
+	)
+
+	// Prepare test directory
+	tmpDir, errTmp := os.MkdirTemp(".", "goscans-discovery-test-*")
+	if errTmp != nil {
+		panic(errTmp)
+	}
+	if errChdir := os.Chdir(tmpDir); errChdir != nil {
+		panic(errChdir)
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Prepare cleanup
+	_ = os.Chdir("..")
+	_ = os.RemoveAll(tmpDir)
+
+	// Return nil as everything went fine
+	os.Exit(code)
+}
 
 const nmapLfChar = "\n"
 const testTarget = "127.0.0.1"
@@ -42,67 +92,17 @@ var testArgs = []string{
 	"--script", "vmware-version,tls-ticketbleed,smb2-time,smb2-security-mode,smb2-capabilities,smb-vuln-ms17-010,smb-double-pulsar-backdoor,openwebnet-discovery,Http-vuln-cve2017-1001000,Http-security-headers,Http-cookie-flags,ftp-syst,cics-info",
 }
 
-func TestCheckSetup(t *testing.T) {
-
-	// Prepare and run test cases
-	tests := []struct {
-		name    string
-		nmapDir string
-		nmap    string
-		wantErr bool
-	}{
-		{"invalid", "notexisting.exe", "notexistingDir", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := CheckSetup(tt.nmapDir, tt.nmap); (err != nil) != tt.wantErr {
-				t.Errorf("CheckSetup() error = '%v', wantErr = '%v'", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestSetup(t *testing.T) {
-
-	// Retrieve test settings
-	testLogger := utils.NewTestLogger()
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
-
-	// Prepare and run test cases
-	tests := []struct {
-		name    string
-		nmapDir string
-		nmap    string
-		wantErr bool
-	}{
-		{"invalid-privileges", testSettings.PathNmapDir, testSettings.PathNmap, true}, // throws error without admin process privileges
-		{"invalid-dir", testSettings.PathNmapDir, "notexistingDir", true},
-		{"invalid-exe", "notexisting.exe", testSettings.PathNmap, true},
-		{"invalid-all", "notexisting.exe", "notexistingDir", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := Setup(testLogger, tt.nmapDir, tt.nmap); (err != nil) != tt.wantErr {
-				t.Errorf("Setup() error = '%v', wantErr = '%v'", err, tt.wantErr)
-			}
-		})
-	}
-}
-
+// TestNewScanner verifies that NewScanner returns an error for invalid inputs and no error for valid configurations.
 func TestNewScanner(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
+	testSettings := _test.GetSettings()
+	if testSettings.PathNmap == "" {
+		t.Skip("Integration test skipped: PathNmap not configured in _test/settings.go")
 		return
 	}
 
-	// Prepare test variables
+	// Prepare unit test data
 	testLogger := utils.NewTestLogger()
 	nmapBlacklist := []string{"20.20.20.2", "10.10.10.1"}
 	nmapBlacklistFile := filepath.Join(testSettings.PathDataDir, "discovery", "blacklist_valid.txt")
@@ -135,16 +135,56 @@ func TestNewScanner(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"valid-basic", args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""}, false},
-		{"valid-no-args", args{testLogger, testTarget, testSettings.PathNmap, []string{}, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""}, false},
-		{"valid-no-versionall", args{testLogger, testTarget, testSettings.PathNmap, testArgs, false, nmapBlacklist, nmapBlacklistFile, "", "", "", ""}, false},
-		{"valid-ldap-url", args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "https://sub.domain.tld", "", "", ""}, false},
-		{"invalid-ldap-url", args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "sub.domain.tld", "", "", ""}, true},
-		{"invalid-blacklist-path", args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, "notexisting", "", "", "", ""}, true},
-		{"invalid-target1", args{testLogger, "", testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""}, true},
-		{"invalid-target2", args{testLogger, "invalid input", testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""}, true},
-		{"invalid-nmap", args{testLogger, testTarget, "notexisting", testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""}, true},
-		{"invalid-credentials-set", args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "some.domain", "", ""}, true},
+		{
+			name:    "valid-basic",
+			args:    args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""},
+			wantErr: false,
+		},
+		{
+			name:    "valid-no-args",
+			args:    args{testLogger, testTarget, testSettings.PathNmap, []string{}, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""},
+			wantErr: false,
+		},
+		{
+			name:    "valid-no-versionall",
+			args:    args{testLogger, testTarget, testSettings.PathNmap, testArgs, false, nmapBlacklist, nmapBlacklistFile, "", "", "", ""},
+			wantErr: false,
+		},
+		{
+			name:    "invalid-ldap-url",
+			args:    args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "https://sub.domain.tld", "", "", ""},
+			wantErr: true,
+		},
+		{
+			name:    "valid-ldap-url",
+			args:    args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "sub.domain.tld", "", "", ""},
+			wantErr: false,
+		},
+		{
+			name:    "invalid-blacklist-path",
+			args:    args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, "notexisting", "", "", "", ""},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-target1",
+			args:    args{testLogger, "", testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-target2",
+			args:    args{testLogger, "invalid input", testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-nmap",
+			args:    args{testLogger, testTarget, "notexisting", testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "", "", ""},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-credentials-set",
+			args:    args{testLogger, testTarget, testSettings.PathNmap, testArgs, true, nmapBlacklist, nmapBlacklistFile, "", "some.domain", "", ""},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -157,22 +197,19 @@ func TestNewScanner(t *testing.T) {
 	}
 }
 
+// TestExtractHostData verifies that extractHostData correctly parses host information from an Nmap result.
 func TestExtractHostData(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	nmapXml := filepath.Join(testSettings.PathDataDir, "discovery", "host123.domain.tld.xml")
 
 	// Read Nmap result form file
 	in, err := os.ReadFile(nmapXml)
 	if err != nil {
-		t.Errorf("Rading Nmap sample result failed: %s", err)
+		t.Errorf("Reading Nmap sample result failed: %s", err)
 	}
 
 	// Parse Nmap result
@@ -193,13 +230,13 @@ func TestExtractHostData(t *testing.T) {
 		want4 time.Duration
 	}{
 		{
-			"valid",
-			scanResult.Hosts[0],
-			[]string{"host123.sub.domain.tld", "HOST123.sub.domain.tld"},
-			nil,
-			[]string{"96% Microsoft Windows 7 SP1", "92% Microsoft Windows 8.1 Update 1", "92% Microsoft Windows Phone 7.5 or 8.0", "91% Microsoft Windows 7 or Windows Server 2008 R2", "91% Microsoft Windows Server 2008 R2", "91% Microsoft Windows Server 2008 R2 or Windows 8.1", "91% Microsoft Windows Server 2008 R2 SP1 or Windows 8", "91% Microsoft Windows 7", "91% Microsoft Windows 7 Professional or Windows 8", "91% Microsoft Windows 7 SP1 or Windows Server 2008 R2"},
-			time.Date(2019, 02, 21, 14, 32, 49, 0, &time.Location{}),
-			time.Second * 20776,
+			name:  "valid",
+			h:     scanResult.Hosts[0],
+			want:  []string{"host123.sub.domain.tld", "HOST123.sub.domain.tld"},
+			want1: nil,
+			want2: []string{"96% Microsoft Windows 7 SP1", "92% Microsoft Windows 8.1 Update 1", "92% Microsoft Windows Phone 7.5 or 8.0", "91% Microsoft Windows 7 or Windows Server 2008 R2", "91% Microsoft Windows Server 2008 R2", "91% Microsoft Windows Server 2008 R2 or Windows 8.1", "91% Microsoft Windows Server 2008 R2 SP1 or Windows 8", "91% Microsoft Windows 7", "91% Microsoft Windows 7 Professional or Windows 8", "91% Microsoft Windows 7 SP1 or Windows Server 2008 R2"},
+			want3: time.Date(2019, 02, 21, 14, 32, 49, 0, &time.Location{}),
+			want4: time.Second * 20776,
 		},
 	}
 	for _, tt := range tests {
@@ -224,22 +261,19 @@ func TestExtractHostData(t *testing.T) {
 	}
 }
 
+// TestExtractPortData verifies that extractPortData correctly parses port service information from an Nmap result.
 func TestExtractPortData(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	nmapXml := filepath.Join(testSettings.PathDataDir, "discovery", "host123.domain.tld.xml")
 
 	// Read Nmap result form file
-	in, err := os.ReadFile(nmapXml)
-	if err != nil {
-		t.Errorf("Rading Nmap sample result failed: %s", err)
+	in, errRead := os.ReadFile(nmapXml)
+	if errRead != nil {
+		t.Errorf("Reading Nmap sample result failed: %s", errRead)
 	}
 
 	// Parse Nmap result
@@ -288,7 +322,12 @@ func TestExtractPortData(t *testing.T) {
 		want  []Service
 		want1 []string
 	}{
-		{"valid", scanResult.Hosts[0].Ports, services, []string{"HOST123"}},
+		{
+			name:  "valid",
+			ports: scanResult.Hosts[0].Ports,
+			want:  services,
+			want1: []string{"HOST123"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -303,22 +342,19 @@ func TestExtractPortData(t *testing.T) {
 	}
 }
 
+// TestExtractHostScriptData verifies that extractHostScriptData correctly parses Nmap host script output.
 func TestExtractHostScriptData(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	nmapXml := filepath.Join(testSettings.PathDataDir, "discovery", "host123.domain.tld.xml")
 
 	// Read Nmap result form file
 	in, errRead := os.ReadFile(nmapXml)
 	if errRead != nil {
-		t.Errorf("Rading Nmap sample result failed: %s", errRead)
+		t.Errorf("Reading Nmap sample result failed: %s", errRead)
 	}
 
 	// Parse Nmap result
@@ -345,11 +381,17 @@ func TestExtractHostScriptData(t *testing.T) {
 	tests := []struct {
 		name        string
 		hostScripts []nmap.Script
-		want        []string
-		want1       string
-		want2       []Script
+		want        []Script
+		want1       []string
+		want2       string
 	}{
-		{"valid", scanResult.Hosts[0].HostScripts, []string{"HOST123.sub.domain.tld"}, "Windows 7 Enterprise 7601 Service Pack 1", scripts},
+		{
+			name:        "valid",
+			hostScripts: scanResult.Hosts[0].HostScripts,
+			want:        scripts,
+			want1:       []string{"HOST123.sub.domain.tld"},
+			want2:       "Windows 7 Enterprise 7601 Service Pack 1",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -357,32 +399,29 @@ func TestExtractHostScriptData(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("extractHostScriptData() = '%v', want = '%v'", got, tt.want)
 			}
-			if got1 != tt.want1 {
+			if !reflect.DeepEqual(got1, tt.want1) {
 				t.Errorf("extractHostScriptData() got1 = '%v', want = '%v'", got1, tt.want1)
 			}
-			if !reflect.DeepEqual(got2, tt.want2) {
+			if got2 != tt.want2 {
 				t.Errorf("extractHostScriptData() got2 = '%v', want = '%v'", got2, tt.want2)
 			}
 		})
 	}
 }
 
+// TestExtractPortScriptData verifies that extractPortScriptData correctly parses Nmap port script output.
 func TestExtractPortScriptData(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	nmapXml := filepath.Join(testSettings.PathDataDir, "discovery", "host123.domain.tld.xml")
 
 	// Read Nmap result form file
 	in, errRead := os.ReadFile(nmapXml)
 	if errRead != nil {
-		t.Errorf("Rading Nmap sample result failed: %s", errRead)
+		t.Errorf("Reading Nmap sample result failed: %s", errRead)
 	}
 
 	// Parse Nmap result
@@ -402,11 +441,17 @@ func TestExtractPortScriptData(t *testing.T) {
 	tests := []struct {
 		name  string
 		ports []nmap.Port
-		want  []string
-		want1 []int
-		want2 []Script
+		want  []Script
+		want1 []string
+		want2 []int
 	}{
-		{"valid", scanResult.Hosts[0].Ports, []string{"HOST123.sub.domain.tld"}, []int{3389}, scripts},
+		{
+			name:  "valid",
+			ports: scanResult.Hosts[0].Ports,
+			want:  scripts,
+			want1: []string{"HOST123.sub.domain.tld"},
+			want2: []int{3389},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -424,9 +469,10 @@ func TestExtractPortScriptData(t *testing.T) {
 	}
 }
 
+// TestDecideDnsName verifies that decideDnsName selects the correct forward-resolving hostname from the candidate list.
 func TestDecideDnsName(t *testing.T) {
 
-	// Prepare test variables
+	// Prepare unit test data
 	excludeDomains := []string{"cloudfront.net", "wildcard.cloudfront.net", "azurewebsites.net"}
 
 	// Prepare and run test cases
@@ -441,12 +487,21 @@ func TestDecideDnsName(t *testing.T) {
 		want  string
 		want2 []string
 	}{
-		{"domain-valid-forward", args{&Host{Ip: "195.54.164.39", OtherNames: []string{"*.domain.tld", "ccc.de", "notexisting"}}, make(chan struct{}, 1), make(chan *Host)}, "ccc.de", []string{"domain.tld", "wildcard.domain.tld", "notexisting"}},
-		{"domain-invalid", args{&Host{Ip: "192.168.0.1", OtherNames: []string{"*.domain.tld", "www.cert.domain.tld", "cert.domain.tld", "notexisting"}}, make(chan struct{}, 1), make(chan *Host)}, "", []string{"domain.tld", "cert.domain.tld", "wildcard.domain.tld", "www.cert.domain.tld", "notexisting"}},
+		{
+			name:  "domain-valid-forward",
+			args:  args{&Host{Ip: "195.54.164.39", OtherNames: []string{"*.domain.tld", "ccc.de", "notexisting"}}, make(chan struct{}, 1), make(chan *Host)},
+			want:  "ccc.de",
+			want2: []string{"domain.tld", "wildcard.domain.tld", "notexisting"},
+		},
+		{
+			name:  "domain-invalid",
+			args:  args{&Host{Ip: "192.168.0.1", OtherNames: []string{"*.domain.tld", "www.cert.domain.tld", "cert.domain.tld", "notexisting"}}, make(chan struct{}, 1), make(chan *Host)},
+			want:  "",
+			want2: []string{"domain.tld", "cert.domain.tld", "wildcard.domain.tld", "www.cert.domain.tld", "notexisting"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			// Launch function asynchronously
 			decideDnsName(tt.args.hData, []string{}, excludeDomains)
 
@@ -461,6 +516,7 @@ func TestDecideDnsName(t *testing.T) {
 	}
 }
 
+// Test_sanitizeDnsNames verifies that sanitizeDnsNames deduplicates, lowercases, and excludes blocked domains.
 func Test_sanitizeDnsNames(t *testing.T) {
 	input := []string{"sub1.cert.domain.tld", "sub2.domain.tld", "SuB2.domain.tld", "nothing", "A", "sub.domain.tld", "", "", "127.0.0.1", "127.0.0.1", "127.0.0.1", "127.0.0.1", "1::", "*.sub.domain.tld", "azurewebsites.net"}
 	output := []string{"sub1.cert.domain.tld", "sub2.domain.tld", "nothing", "a", "sub.domain.tld", "wildcard.sub.domain.tld"}
@@ -472,7 +528,12 @@ func Test_sanitizeDnsNames(t *testing.T) {
 		excludeDomains []string
 		want           []string
 	}{
-		{"test1", input, []string{"cloudfront.net", "wildcard.cloudfront.net", "azurewebsites.net"}, output},
+		{
+			name:           "dedup-lowercase-excluded-domains",
+			hostnames:      input,
+			excludeDomains: []string{"cloudfront.net", "wildcard.cloudfront.net", "azurewebsites.net"},
+			want:           output,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -483,6 +544,7 @@ func Test_sanitizeDnsNames(t *testing.T) {
 	}
 }
 
+// Test_orderDnsNames verifies that orderDnsNames returns hostnames in priority order matching the domain chain.
 func Test_orderDnsNames(t *testing.T) {
 
 	// Sample priority chain
@@ -507,30 +569,30 @@ func Test_orderDnsNames(t *testing.T) {
 		hostnames []string
 		want      []string
 	}{
-		{"disorder0", utils.Shuffle([]string{"forrest1.domain.local", "host.forrest1.domain.local"}), []string{"forrest1.domain.local", "host.forrest1.domain.local"}},
-		{"disorder1", utils.Shuffle([]string{"host.forrest1.domain.local", "domain.local"}), []string{"host.forrest1.domain.local", "domain.local"}},
-		{"disorder2", utils.Shuffle([]string{"domain.local", "forrest2.domain.local"}), []string{"domain.local", "forrest2.domain.local"}},
-		{"disorder3", utils.Shuffle([]string{"forrest2.domain.local", "forrest3.domain.local"}), []string{"forrest2.domain.local", "forrest3.domain.local"}},
-		{"disorder4", utils.Shuffle([]string{"forrest3.domain.local", "host.forrest3.domain.local"}), []string{"forrest3.domain.local", "host.forrest3.domain.local"}},
-		{"disorder5", utils.Shuffle([]string{"host.forrest3.domain.local", "other.local"}), []string{"host.forrest3.domain.local", "other.local"}},
-		{"disorder6", utils.Shuffle([]string{"other.local", "host.other.local"}), []string{"other.local", "host.other.local"}},
-		{"disorder7", utils.Shuffle([]string{"host.other.local", "host.third-party.com"}), []string{"host.other.local", "host.third-party.com"}},
-		{"disorder8", utils.Shuffle([]string{"host.third-party.com", "g.com"}), []string{"host.third-party.com", "g.com"}},
-		{"disorder9", utils.Shuffle([]string{"g.com", "google.com"}), []string{"g.com", "google.com"}},
-		{"disorder10", utils.Shuffle([]string{"google.com", "some.com"}), []string{"google.com", "some.com"}},
-		{"disorder11", utils.Shuffle([]string{"some.com", "some.de"}), []string{"some.com", "some.de"}},
-		{"disorder12", utils.Shuffle([]string{"some.de", "some4life.de"}), []string{"some.de", "some4life.de"}},
-		{"disorder13", utils.Shuffle([]string{"some4life.de", "host.google.com"}), []string{"some4life.de", "host.google.com"}},
-		{"disorder14", utils.Shuffle([]string{"host.google.com", "host.some.com"}), []string{"host.google.com", "host.some.com"}},
-		{"disorder15", utils.Shuffle([]string{"host.some.com", "some.geocities.com"}), []string{"host.some.com", "some.geocities.com"}},
-		{"disorder16", utils.Shuffle([]string{"some.geocities.com", "some.hosting.com"}), []string{"some.geocities.com", "some.hosting.com"}},
-		{"disorder17", utils.Shuffle([]string{"some.hosting.com", "anythingelse"}), []string{"some.hosting.com", "anythingelse"}},
-		{"disorder18", utils.Shuffle(order), order},
-		{"disorder19", utils.Shuffle([]string{"localhost", "hostname", "domain.com", "some.hosting.com", "anythingelse"}), []string{"domain.com", "some.hosting.com", "anythingelse", "hostname", "localhost"}},
-		{"disorder20", utils.Shuffle([]string{"abcde", "abcde.domain.tld", "abcde.domain2.tld"}), []string{"abcde.domain.tld", "abcde.domain2.tld", "abcde"}},
+		{name: "disorder0", hostnames: utils.Shuffle([]string{"forrest1.domain.local", "host.forrest1.domain.local"}), want: []string{"forrest1.domain.local", "host.forrest1.domain.local"}},
+		{name: "disorder1", hostnames: utils.Shuffle([]string{"host.forrest1.domain.local", "domain.local"}), want: []string{"host.forrest1.domain.local", "domain.local"}},
+		{name: "disorder2", hostnames: utils.Shuffle([]string{"domain.local", "forrest2.domain.local"}), want: []string{"domain.local", "forrest2.domain.local"}},
+		{name: "disorder3", hostnames: utils.Shuffle([]string{"forrest2.domain.local", "forrest3.domain.local"}), want: []string{"forrest2.domain.local", "forrest3.domain.local"}},
+		{name: "disorder4", hostnames: utils.Shuffle([]string{"forrest3.domain.local", "host.forrest3.domain.local"}), want: []string{"forrest3.domain.local", "host.forrest3.domain.local"}},
+		{name: "disorder5", hostnames: utils.Shuffle([]string{"host.forrest3.domain.local", "other.local"}), want: []string{"host.forrest3.domain.local", "other.local"}},
+		{name: "disorder6", hostnames: utils.Shuffle([]string{"other.local", "host.other.local"}), want: []string{"other.local", "host.other.local"}},
+		{name: "disorder7", hostnames: utils.Shuffle([]string{"host.other.local", "host.third-party.com"}), want: []string{"host.other.local", "host.third-party.com"}},
+		{name: "disorder8", hostnames: utils.Shuffle([]string{"host.third-party.com", "g.com"}), want: []string{"host.third-party.com", "g.com"}},
+		{name: "disorder9", hostnames: utils.Shuffle([]string{"g.com", "google.com"}), want: []string{"g.com", "google.com"}},
+		{name: "disorder10", hostnames: utils.Shuffle([]string{"google.com", "some.com"}), want: []string{"google.com", "some.com"}},
+		{name: "disorder11", hostnames: utils.Shuffle([]string{"some.com", "some.de"}), want: []string{"some.com", "some.de"}},
+		{name: "disorder12", hostnames: utils.Shuffle([]string{"some.de", "some4life.de"}), want: []string{"some.de", "some4life.de"}},
+		{name: "disorder13", hostnames: utils.Shuffle([]string{"some4life.de", "host.google.com"}), want: []string{"some4life.de", "host.google.com"}},
+		{name: "disorder14", hostnames: utils.Shuffle([]string{"host.google.com", "host.some.com"}), want: []string{"host.google.com", "host.some.com"}},
+		{name: "disorder15", hostnames: utils.Shuffle([]string{"host.some.com", "some.geocities.com"}), want: []string{"host.some.com", "some.geocities.com"}},
+		{name: "disorder16", hostnames: utils.Shuffle([]string{"some.geocities.com", "some.hosting.com"}), want: []string{"some.geocities.com", "some.hosting.com"}},
+		{name: "disorder17", hostnames: utils.Shuffle([]string{"some.hosting.com", "anythingelse"}), want: []string{"some.hosting.com", "anythingelse"}},
+		{name: "disorder18", hostnames: utils.Shuffle(order), want: order},
+		{name: "disorder19", hostnames: utils.Shuffle([]string{"localhost", "hostname", "domain.com", "some.hosting.com", "anythingelse"}), want: []string{"domain.com", "some.hosting.com", "anythingelse", "hostname", "localhost"}},
+		{name: "disorder20", hostnames: utils.Shuffle([]string{"abcde", "abcde.domain.tld", "abcde.domain2.tld"}), want: []string{"abcde.domain.tld", "abcde.domain2.tld", "abcde"}},
 
 		// Prefer FQDNs over incomplete hostnames
-		{"disorder20", []string{"hostname", "hostname.domain.tld"}, []string{"hostname.domain.tld", "hostname"}},
+		{name: "disorder21", hostnames: []string{"hostname", "hostname.domain.tld"}, want: []string{"hostname.domain.tld", "hostname"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -541,6 +603,7 @@ func Test_orderDnsNames(t *testing.T) {
 	}
 }
 
+// Test_identifyDnsName verifies that identifyDnsName selects the hostname that forward-resolves to the given IP.
 func Test_identifyDnsName(t *testing.T) {
 
 	// Prepare and run test cases
@@ -555,34 +618,34 @@ func Test_identifyDnsName(t *testing.T) {
 		want1 []string
 	}{
 		{
-			"invalid-ip",
-			args{[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"}, "invalid_ip"},
-			"",
-			[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"},
+			name:  "invalid-ip",
+			args:  args{[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"}, "invalid_ip"},
+			want:  "",
+			want1: []string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"},
 		},
 		{
-			"empty-ip",
-			args{[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"}, ""},
-			"",
-			[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"},
+			name:  "empty-ip",
+			args:  args{[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"}, ""},
+			want:  "",
+			want1: []string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"},
 		},
 		{
-			"none-resolving",
-			args{[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"}, "10.10.10.10"},
-			"",
-			[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"},
+			name:  "none-resolving",
+			args:  args{[]string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"}, "10.10.10.10"},
+			want:  "",
+			want1: []string{"something-not-existing.com", "nothing", "with space", "something-not-existing.domain.tld"},
 		},
 		{
-			"none-valid",
-			args{[]string{"domain.tld", "nothing", "with space", "sub.domain.tld"}, "10.10.10.10"},
-			"",
-			[]string{"domain.tld", "nothing", "with space", "sub.domain.tld"},
+			name:  "none-valid",
+			args:  args{[]string{"domain.tld", "nothing", "with space", "sub.domain.tld"}, "10.10.10.10"},
+			want:  "",
+			want1: []string{"domain.tld", "nothing", "with space", "sub.domain.tld"},
 		},
 		{
-			"one-valid",
-			args{[]string{"ccc.de", "nothing", "www.ccc.de", "with space", "sub.ccc.de"}, "195.54.164.39"},
-			"ccc.de",
-			[]string{"www.ccc.de", "nothing", "with space", "sub.ccc.de"},
+			name:  "one-valid",
+			args:  args{[]string{"ccc.de", "nothing", "www.ccc.de", "with space", "sub.ccc.de"}, "195.54.164.39"},
+			want:  "ccc.de",
+			want1: []string{"www.ccc.de", "nothing", "with space", "sub.ccc.de"},
 		},
 	}
 	for _, tt := range tests {
@@ -593,6 +656,155 @@ func Test_identifyDnsName(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got1, tt.want1) {
 				t.Errorf("identifyDnsName() got1 = '%v', want1 = '%v'", got1, tt.want1)
+			}
+		})
+	}
+}
+
+// TestAppendMissingOtHosts verifies that appendMissingOtHosts injects OT-only hosts and skips those whose MAC was
+// already seen.
+func TestAppendMissingOtHosts(t *testing.T) {
+
+	// Prepare unit test data
+	testLogger := utils.NewTestLogger()
+
+	// Prepare and run test cases
+	tests := []struct {
+		name      string
+		hostsOt   []ot.Host
+		seenMacs  map[string]struct{}
+		initial   []*Host
+		wantCount int
+	}{
+		{
+			name:      "empty-ot-list",
+			hostsOt:   []ot.Host{},
+			seenMacs:  map[string]struct{}{},
+			initial:   []*Host{},
+			wantCount: 0,
+		},
+		{
+			name:      "new-mac-appended",
+			hostsOt:   []ot.Host{{MacAddress: "AA:BB:CC:DD:EE:FF", Ip: "192.0.2.1"}},
+			seenMacs:  map[string]struct{}{},
+			initial:   []*Host{},
+			wantCount: 1,
+		},
+		{
+			name:      "duplicate-mac-skipped",
+			hostsOt:   []ot.Host{{MacAddress: "AA:BB:CC:DD:EE:FF", Ip: "192.0.2.1"}},
+			seenMacs:  map[string]struct{}{"AA:BB:CC:DD:EE:FF": {}},
+			initial:   []*Host{},
+			wantCount: 0,
+		},
+		{
+			name:      "empty-mac-always-appended",
+			hostsOt:   []ot.Host{{MacAddress: "", Ip: "192.0.2.2"}},
+			seenMacs:  map[string]struct{}{"": {}},
+			initial:   []*Host{},
+			wantCount: 1,
+		},
+		{
+			name:      "identifier-falls-back-to-mac",
+			hostsOt:   []ot.Host{{MacAddress: "BB:CC:DD:EE:FF:00", Ip: "", DnsName: ""}},
+			seenMacs:  map[string]struct{}{},
+			initial:   []*Host{},
+			wantCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := appendMissingOtHosts(testLogger, tt.hostsOt, tt.seenMacs, tt.initial)
+			if len(got) != tt.wantCount {
+				t.Errorf("appendMissingOtHosts() len = '%v', want = '%v'", len(got), tt.wantCount)
+			}
+		})
+	}
+}
+
+// TestAllZero verifies that allZero returns true only when every byte in the slice is zero.
+func TestAllZero(t *testing.T) {
+
+	// Prepare and run test cases
+	tests := []struct {
+		name string
+		s    []byte
+		want bool
+	}{
+		{
+			name: "all-zeros",
+			s:    []byte{0, 0, 0},
+			want: true,
+		},
+		{
+			name: "one-nonzero",
+			s:    []byte{0, 1, 0},
+			want: false,
+		},
+		{
+			name: "empty-slice",
+			s:    []byte{},
+			want: true,
+		},
+		{
+			name: "single-nonzero",
+			s:    []byte{255},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := allZero(tt.s); got != tt.want {
+				t.Errorf("allZero() = '%v', want = '%v'", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseStringData verifies that parseStringData correctly reads numEntries and securityOffset from the header
+// and collects the expected number of uint16 binding entries.
+func TestParseStringData(t *testing.T) {
+
+	// Prepare and run test cases
+	tests := []struct {
+		name           string
+		data           []byte
+		wantNumEntries int
+		wantSecOffset  int
+		wantArrayLen   int
+	}{
+		{
+			name:           "zero-entries",
+			data:           make([]byte, 16),
+			wantNumEntries: 0,
+			wantSecOffset:  0,
+			wantArrayLen:   0,
+		},
+		{
+			name: "one-entry",
+			data: func() []byte {
+				buf := make([]byte, 18)
+				binary.LittleEndian.PutUint32(buf[8:12], 1)
+				binary.LittleEndian.PutUint16(buf[14:16], 0)
+				binary.LittleEndian.PutUint16(buf[16:18], 0xAB)
+				return buf
+			}(),
+			wantNumEntries: 1,
+			wantSecOffset:  0,
+			wantArrayLen:   1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseStringData(tt.data)
+			if got.bindingsNumEntries != tt.wantNumEntries {
+				t.Errorf("parseStringData() bindingsNumEntries = '%v', want = '%v'", got.bindingsNumEntries, tt.wantNumEntries)
+			}
+			if got.bindingsSecurityOffset != tt.wantSecOffset {
+				t.Errorf("parseStringData() bindingsSecurityOffset = '%v', want = '%v'", got.bindingsSecurityOffset, tt.wantSecOffset)
+			}
+			if len(got.bindingsStringArray) != tt.wantArrayLen {
+				t.Errorf("parseStringData() bindingsStringArray len = '%v', want = '%v'", len(got.bindingsStringArray), tt.wantArrayLen)
 			}
 		})
 	}

@@ -1,23 +1,14 @@
-/*
-* GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
-*
-* Copyright (c) Siemens AG, 2016-2025.
-*
-* This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
-* directory or visit <https://opensource.org/licenses/MIT>.
-*
- */
-
-package active_directory
+package ad
 
 import (
 	"fmt"
-	"github.com/go-ldap/ldap/v3"
-	cmap "github.com/orcaman/concurrent-map/v2"
-	"github.com/siemens/GoScans/utils"
 	"net"
 	"strings"
 	"time"
+
+	"github.com/go-ldap/ldap/v3"
+	cmap "github.com/orcaman/concurrent-map/v2"
+	"github.com/siemens/GoScans/utils"
 )
 
 // cache is the package-wide instance of Cache

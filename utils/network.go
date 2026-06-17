@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,9 +12,23 @@ package utils
 
 import (
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 )
+
+// dnsLookupIp and dnsLookupAddr are the DNS functions used internally.
+// Override via OverrideDNS in tests.
+var dnsLookupIp func(host string) ([]net.IP, error) = net.LookupIP
+var dnsLookupAddr func(addr string) ([]string, error) = net.LookupAddr
+
+// OverrideDNS replaces the DNS lookup functions used by ResolvesToIp and ResolvesToHostname.
+// Returns a restore function. For use in tests only.
+func OverrideDNS(ipFn func(string) ([]net.IP, error), addrFn func(string) ([]string, error)) func() {
+	oldIP, oldAddr := dnsLookupIp, dnsLookupAddr
+	dnsLookupIp, dnsLookupAddr = ipFn, addrFn
+	return func() { dnsLookupIp, dnsLookupAddr = oldIP, oldAddr }
+}
 
 // ResolvesToIp resolves a given DNS name and checks whether the result matches the expected IP address.
 func ResolvesToIp(hostname string, expectedIp string) bool {
@@ -30,7 +44,7 @@ func ResolvesToIp(hostname string, expectedIp string) bool {
 	}
 
 	// Return false if hostname lookup failed
-	ips, err := net.LookupIP(hostname)
+	ips, err := dnsLookupIp(hostname)
 	if err != nil {
 		return false
 	}
@@ -61,7 +75,7 @@ func ResolvesToHostname(ip string, hostname string) bool {
 	}
 
 	// Return false if reverse lookup failed
-	resolvedHostnames, err := net.LookupAddr(ip)
+	resolvedHostnames, err := dnsLookupAddr(ip)
 	if err != nil {
 		return false
 	}
@@ -125,10 +139,7 @@ func IsValidHostname(hostname string) bool {
 
 // IsValidIp determines whether a given string is a valid IPv4/IPv6 address
 func IsValidIp(s string) bool {
-	if net.ParseIP(s) != nil {
-		return true
-	}
-	return false
+	return net.ParseIP(s) != nil
 }
 
 // IsValidIpV4 determines whether a given string is a valid IPv4 address
@@ -150,10 +161,7 @@ func IsValidIpV6(s string) bool {
 // IsValidIpRange determines whether a given string is a valid network range
 func IsValidIpRange(s string) bool {
 	_, _, err := net.ParseCIDR(s)
-	if err == nil {
-		return true
-	}
-	return false
+	return err == nil
 }
 
 // IsValidAddress determines whether a given string is a valid IPv4, IPv6 or hostname, but NOT a network range
@@ -164,4 +172,50 @@ func IsValidAddress(s string) bool {
 		return true
 	}
 	return false
+}
+
+// IsValidUrl determines whether a given string is a valid url (with any scheme)
+func IsValidUrl(s string) bool {
+
+	// Attempt to parse as URL
+	parsedUrl, errParse := url.Parse(s)
+	if errParse != nil {
+		return false
+	}
+
+	// Ensure scheme is present
+	if parsedUrl.Scheme == "" {
+		return false
+	}
+
+	// Ensure host is present
+	if parsedUrl.Host == "" {
+		return false
+	}
+
+	// Return valid if all checks passed
+	return true
+}
+
+// IsValidUrlHttp determines whether a given string is a valid HTTP(s) url
+func IsValidUrlHttp(s string) bool {
+
+	// Attempt to parse as URL
+	parsedUrl, errParse := url.Parse(s)
+	if errParse != nil {
+		return false
+	}
+
+	// Check if scheme is http or https
+	if parsedUrl.Scheme != "http" && parsedUrl.Scheme != "https" {
+		return false
+	}
+
+	// Ensure host is present
+	if parsedUrl.Host == "" {
+		return false
+	}
+
+	// Return valid if all checks passed
+	return true
 }

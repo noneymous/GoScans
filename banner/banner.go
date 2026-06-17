@@ -1,24 +1,26 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package banner implements a scan module for banner grabbing over TCP/TLS connections.
 package banner
 
 import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
-	"github.com/siemens/GoScans/utils"
-	"github.com/ziutek/telnet"
 	"net"
 	"strings"
 	"time"
+
+	"github.com/siemens/GoScans/utils"
+	"github.com/ziutek/telnet"
 )
 
 const Label = "Banner"
@@ -80,6 +82,9 @@ func NewScanner(
 	receiveTimeout time.Duration,
 ) (*Scanner, error) {
 
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
+
 	// Check whether input target is valid
 	if !utils.IsValidAddress(target) {
 		return nil, fmt.Errorf("invalid target '%s'", target)
@@ -96,9 +101,9 @@ func NewScanner(
 		time.Time{}, // zero time
 		time.Time{}, // zero time
 		logger,
-		strings.TrimSpace(target), // Address to be scanned (might be IPv4, IPv6 or hostname)
+		target, // Address to be scanned (might be IPv4, IPv6 or hostname)
 		port,
-		strings.TrimSpace(protocol),
+		protocol,
 		dialTimeout,
 		receiveTimeout,
 	}
@@ -285,13 +290,13 @@ func sendPlain(
 
 	// Receive response
 	responseBuffer := make([]byte, receiveSize)
-	n, errRead := conn.Read(responseBuffer)
+	_, errRead := conn.Read(responseBuffer)
 	if errRead != nil && errRead.Error() != "EOF" {
 		return []byte{}, errRead
 	}
 
 	// Slice the buffer up until first null byte if a null byte exists at all
-	n = bytes.IndexByte(responseBuffer, 0)
+	n := bytes.IndexByte(responseBuffer, 0)
 	if n >= 0 {
 		responseBuffer = responseBuffer[:n]
 	}
@@ -330,13 +335,13 @@ func sendSsl(address string, port int, trigger string, dialTimeout, receiveTimeo
 
 	// Receive response
 	responseBuffer := make([]byte, receiveSize)
-	n, errRead := conn.Read(responseBuffer)
+	_, errRead := conn.Read(responseBuffer)
 	if errRead != nil && errRead.Error() != "EOF" {
 		return []byte{}, errRead
 	}
 
 	// Slice the buffer up until first null byte if a null byte exists at all
-	n = bytes.IndexByte(responseBuffer, 0)
+	n := bytes.IndexByte(responseBuffer, 0)
 	if n >= 0 {
 		responseBuffer = responseBuffer[:n]
 	}
@@ -375,13 +380,13 @@ func sendTelnet(address string, port int, isWindows bool, dialTimeout, receiveTi
 
 	// Receive response
 	responseBuffer := make([]byte, receiveSize)
-	n, errRead := conn.Read(responseBuffer)
+	_, errRead := conn.Read(responseBuffer)
 	if errRead != nil && errRead.Error() != "EOF" {
 		return []byte{}, errRead
 	}
 
 	// Slice the buffer up until first null byte if a null byte exists at all
-	n = bytes.IndexByte(responseBuffer, 0)
+	n := bytes.IndexByte(responseBuffer, 0)
 	if n >= 0 {
 		responseBuffer = responseBuffer[:n]
 	}

@@ -8,7 +8,7 @@
 *
  */
 
-package active_directory
+package ad
 
 import (
 	"github.com/siemens/GoScans/utils"

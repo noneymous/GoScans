@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2023.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,11 +12,12 @@ package webcrawler
 
 import (
 	"bytes"
+	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/siemens/GoScans/_test"
-	"github.com/siemens/GoScans/utils"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,20 +25,31 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/siemens/GoScans/_test"
+	"github.com/siemens/GoScans/utils"
 )
 
+// Test_NewCrawler verifies that NewCrawler returns an error for invalid or unreachable targets and succeeds for valid inputs.
 func Test_NewCrawler(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	testLogger := utils.NewTestLogger()
 	timeout := 10 * time.Second
+
+	// Prepare timeout context
+	ctx, ctxCancel := context.WithTimeout(context.Background(), timeout)
+	defer ctxCancel()
+
+	// Start local server to avoid live network dependency for valid-URL cases
+	localSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(localSrv.Close)
 
 	// Prepare and run test cases
 	type args struct {
@@ -56,7 +68,7 @@ func Test_NewCrawler(t *testing.T) {
 		userAgent      string
 		proxy          *url.URL
 		requestTimeout time.Duration
-		deadline       time.Time
+		context        context.Context
 		followTypes    []string
 		downloadTypes  []string
 		maxThreads     int
@@ -66,17 +78,37 @@ func Test_NewCrawler(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"valid-basic", args{testLogger, "https://www.google.com:80", "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, time.Now().Add(timeout), DefaultFollowContentTypes, DefaultDownloadContentTypes, 4}, false},
-		{"negative-threads", args{testLogger, "https://www.google.com", "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, time.Now().Add(timeout), DefaultFollowContentTypes, DefaultDownloadContentTypes, -3}, false},
-		{"invalid-target", args{testLogger, "https://notexisting1234567890qayxsw.com", "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, time.Now().Add(timeout), DefaultFollowContentTypes, DefaultDownloadContentTypes, 4}, true},
-		{"no-content-types", args{testLogger, "https://www.google.com:80", "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, time.Now().Add(timeout), []string{}, []string{}, 4}, false},
-		{"not-http-or-https", args{testLogger, "www.google.com:80", "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, time.Now().Add(timeout), []string{}, []string{}, 4}, true},
+		{
+			name:    "valid-basic",
+			args:    args{testLogger, localSrv.URL, "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, ctx, DefaultFollowContentTypes, DefaultDownloadContentTypes, 4},
+			wantErr: false,
+		},
+		{
+			name:    "negative-threads",
+			args:    args{testLogger, localSrv.URL, "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, ctx, DefaultFollowContentTypes, DefaultDownloadContentTypes, -3},
+			wantErr: false,
+		},
+		{
+			name:    "dns-failure",
+			args:    args{testLogger, "https://nonexistent.invalid", "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, ctx, DefaultFollowContentTypes, DefaultDownloadContentTypes, 4},
+			wantErr: true,
+		},
+		{
+			name:    "no-content-types",
+			args:    args{testLogger, localSrv.URL, "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, ctx, []string{}, []string{}, 4},
+			wantErr: false,
+		},
+		{
+			name:    "not-http-or-https",
+			args:    args{testLogger, "ftp://192.0.2.1:80", "", true, 2, true, true, false, "", "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second * 8, ctx, []string{}, []string{}, 4},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			u, errParse := url.Parse(tt.args.baseUrl)
 			if errParse != nil {
-				t.Errorf("NewCrawler() Could not parse URL.")
+				t.Fatalf("NewCrawler() url.Parse() error = '%v', want = nil", errParse)
 			} else {
 				_, err := NewCrawler(
 					tt.args.logger,
@@ -97,10 +129,10 @@ func Test_NewCrawler(t *testing.T) {
 					tt.args.followTypes,
 					tt.args.downloadTypes,
 					tt.args.maxThreads,
-					tt.args.deadline,
+					tt.args.context,
 				)
 				if (err != nil) != tt.wantErr {
-					t.Errorf("NewCrawler() error = '%v', wantErr '%v'", err, tt.wantErr)
+					t.Errorf("NewCrawler() error = '%v', wantErr = '%v'", err, tt.wantErr)
 					return
 				}
 			}
@@ -108,6 +140,7 @@ func Test_NewCrawler(t *testing.T) {
 	}
 }
 
+// Test_sortQueue verifies that sortQueue orders tasks by depth and path lexicographically.
 func Test_sortQueue(t *testing.T) {
 
 	// The IDs have no effect on the sorting.
@@ -135,8 +168,8 @@ func Test_sortQueue(t *testing.T) {
 		tasks []*task
 	}{
 		{
-			"disorder-1",
-			[]*task{
+			name: "disorder-1",
+			tasks: []*task{
 				{22, &Page{Url: &url.URL{Scheme: "https", Host: "domain.tld", Path: "/admi/stop/asfdasfasdf/"}, Depth: 2}},
 				{17, &Page{Url: &url.URL{Scheme: "https", Host: "domain.tld", Path: "images"}, Depth: 1}},
 				{11, &Page{Url: &url.URL{Scheme: "https", Host: "domain.tld", Path: "/some/subb/"}, Depth: 2}},
@@ -162,7 +195,7 @@ func Test_sortQueue(t *testing.T) {
 			sortQueue(tt.tasks)
 
 			if len(tt.tasks) != len(want) {
-				t.Errorf("sortQueue() Result length = '%v', want '%v'", len(tt.tasks), len(want))
+				t.Errorf("sortQueue() Result length = '%v', want = '%v'", len(tt.tasks), len(want))
 				return
 			}
 
@@ -177,7 +210,7 @@ func Test_sortQueue(t *testing.T) {
 						wantStr += item.page.Url.String() + "\n"
 					}
 					if gotStr != wantStr {
-						t.Errorf("sortQueue() = '%v', want '%v'", gotStr, wantStr)
+						t.Errorf("sortQueue() = '%v', want = '%v'", gotStr, wantStr)
 						return
 					}
 				}
@@ -186,16 +219,13 @@ func Test_sortQueue(t *testing.T) {
 	}
 }
 
+// Test_extractLinks verifies that extractLinks returns all expected href links from a parsed HTML document.
 func Test_extractLinks(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	sampleHtml := filepath.Join(testSettings.PathDataDir, "webcrawler", "sample.html")
 
 	// Prepare and run test cases
@@ -204,7 +234,11 @@ func Test_extractLinks(t *testing.T) {
 		inputFile string
 		want      []string
 	}{
-		{"sample", sampleHtml, []string{"/", "/scanning/monitor/", "/inventory/progress/", "/software/firmware/", "/statistics/year/", "/pentestor/hashcat/", "/profile/", "/voucher/generate/", "/admin/", "/logout/", "/toggle_admin_privileges/top/", "/toggle_fy_filter/top/", "/toggle_class_filter/top/", "/toggle_wiped_filter/anchor_jobs/", "/toggle_fy_filter/anchor_jobs/", "/toggle_class_filter/anchor_jobs/", "/toggle_wiped_filter/anchor_jobs_continuing/", "/toggle_fy_filter/anchor_jobs_continuing/", "/toggle_class_filter/anchor_jobs_continuing/", "/toggle_we_filter/anchor_last_logins/", "/toggle_class_filter/anchor_history/", "/toggle_we_filter/anchor_distribution/", "/toggle_fy_filter/anchor_distribution/", "/toggle_class_filter/anchor_distribution/", "https://www.domain.tld/service1/", "https://www.domain.tld/service2/", "https://www.domain.tld/service3/", "https://www.domain.tld/service4/", "https://www.domain.tld/service5/", "https://www.domain2.tld/1", "https://www.domain2.tld/2", "https://www.domain2.tld/3", "https://www.domain3.tld/1", "/voucher/"}},
+		{
+			name:      "sample",
+			inputFile: sampleHtml,
+			want:      []string{"/", "/scanning/monitor/", "/inventory/progress/", "/software/firmware/", "/statistics/year/", "/pentestor/hashcat/", "/profile/", "/voucher/generate/", "/admin/", "/logout/", "/toggle_admin_privileges/top/", "/toggle_fy_filter/top/", "/toggle_class_filter/top/", "/toggle_wiped_filter/anchor_jobs/", "/toggle_fy_filter/anchor_jobs/", "/toggle_class_filter/anchor_jobs/", "/toggle_wiped_filter/anchor_jobs_continuing/", "/toggle_fy_filter/anchor_jobs_continuing/", "/toggle_class_filter/anchor_jobs_continuing/", "/toggle_we_filter/anchor_last_logins/", "/toggle_class_filter/anchor_history/", "/toggle_we_filter/anchor_distribution/", "/toggle_fy_filter/anchor_distribution/", "/toggle_class_filter/anchor_distribution/", "https://www.domain.tld/service1/", "https://www.domain.tld/service2/", "https://www.domain.tld/service3/", "https://www.domain.tld/service4/", "https://www.domain.tld/service5/", "https://www.domain2.tld/1", "https://www.domain2.tld/2", "https://www.domain2.tld/3", "https://www.domain3.tld/1", "/voucher/"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -224,22 +258,76 @@ func Test_extractLinks(t *testing.T) {
 
 			// Extract links
 			if got := extractLinks(doc); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("extractLinks() = \n 	 '%v',\n want'%v'", got, tt.want)
+				t.Errorf("extractLinks() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// Test_extractLinks_Inline verifies extractLinks filtering edge cases using inline HTML: nil doc, fragment-only, mailto, javascript, and empty href.
+func Test_extractLinks_Inline(t *testing.T) {
+
+	// Prepare and run test cases
+	tests := []struct {
+		name   string
+		html   string
+		nilDoc bool
+		want   []string
+	}{
+		{
+			name:   "nil-doc",
+			nilDoc: true,
+			want:   nil,
+		},
+		{
+			name: "fragment-only",
+			html: `<html><body><a href="#section">anchor</a></body></html>`,
+			want: []string{},
+		},
+		{
+			name: "mailto",
+			html: `<html><body><a href="mailto:user@domain.tld">mail</a></body></html>`,
+			want: []string{},
+		},
+		{
+			name: "javascript",
+			html: `<html><body><a href="javascript:void(0)">click</a></body></html>`,
+			want: []string{"javascript:void(0)"},
+		},
+		{
+			name: "empty-href",
+			html: `<html><body><a href="">link</a></body></html>`,
+			want: []string{""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			// Parse doc from inline HTML, or leave nil for the nil-doc case
+			var doc *goquery.Document
+			if !tt.nilDoc {
+				var errParse error
+				doc, errParse = goquery.NewDocumentFromReader(bytes.NewBufferString(tt.html))
+				if errParse != nil {
+					t.Fatalf("Test_extractLinks_Inline() doc parse error = '%v', want = nil", errParse)
+				}
+			}
+
+			// Verify extracted links
+			if got := extractLinks(doc); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("extractLinks() = '%v', want = '%v'", got, tt.want)
+			}
+		})
+	}
+}
+
+// Test_extractRedirects verifies that extractRedirects returns the expected redirect URL from a parsed HTML document.
 func Test_extractRedirects(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	sampleHtmlRedirect := filepath.Join(testSettings.PathDataDir, "webcrawler", "sample_redirect.html")
 
 	// Prepare and run test cases
@@ -248,7 +336,11 @@ func Test_extractRedirects(t *testing.T) {
 		inputFile string
 		want      []string
 	}{
-		{"sample", sampleHtmlRedirect, []string{"http://www.google.de/"}},
+		{
+			name:      "sample",
+			inputFile: sampleHtmlRedirect,
+			want:      []string{"http://www.google.de/"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -268,12 +360,65 @@ func Test_extractRedirects(t *testing.T) {
 
 			// Extract links
 			if got := extractRedirects(doc); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("extractRedirects() = '%v', want '%v'", got, tt.want)
+				t.Errorf("extractRedirects() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// Test_extractRedirects_EdgeCases verifies extractRedirects behavior for nil doc, missing equals sign, and empty URL after equals.
+func Test_extractRedirects_EdgeCases(t *testing.T) {
+
+	// Prepare and run test cases
+	tests := []struct {
+		name   string
+		html   string
+		nilDoc bool
+		want   []string
+	}{
+		{
+			name:   "nil-doc",
+			nilDoc: true,
+			want:   nil,
+		},
+		{
+			name: "no-equals-in-content",
+			html: `<html><head><meta http-equiv="refresh" content="3"></head></html>`,
+			want: []string{},
+		},
+		{
+			name: "empty-url-after-equals",
+			html: `<html><head><meta http-equiv="refresh" content="3; URL="></head></html>`,
+			want: []string{},
+		},
+		{
+			name: "valid-redirect",
+			html: `<html><head><meta http-equiv="refresh" content="0; URL=http://domain.tld/"></head></html>`,
+			want: []string{"http://domain.tld/"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			// Parse doc from inline HTML, or leave nil for the nil-doc case
+			var doc *goquery.Document
+			if !tt.nilDoc {
+				var errParse error
+				doc, errParse = goquery.NewDocumentFromReader(bytes.NewBufferString(tt.html))
+				if errParse != nil {
+					t.Fatalf("Test_extractRedirects_EdgeCases() doc parse error = '%v', want = nil", errParse)
+				}
+			}
+
+			// Verify extracted redirects
+			if got := extractRedirects(doc); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("extractRedirects() = '%v', want = '%v'", got, tt.want)
+			}
+		})
+	}
+}
+
+// Test_linksToAbsoluteUrls verifies that linksToAbsoluteUrls resolves relative and absolute links against a reference URL.
 func Test_linksToAbsoluteUrls(t *testing.T) {
 
 	// Prepare and run test cases
@@ -286,45 +431,45 @@ func Test_linksToAbsoluteUrls(t *testing.T) {
 		args args
 		want []*url.URL
 	}{
-		{"rel-url-1", args{[]string{"/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap"}}},
-		{"rel-url-2", args{[]string{"/sitemap/"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap/"}}},
-		{"rel-url-3", args{[]string{"/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/home"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap"}}},
-		{"rel-php-1", args{[]string{"/test.php"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/test.php", RawQuery: ""}}},
-		{"rel-php-2", args{[]string{"test.php"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/test.php", RawQuery: ""}}},
-		{"rel-url-query-string", args{[]string{"/sitemap?test"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap", RawQuery: "test"}}},
-		{"rel-url-query-string-fragment", args{[]string{"/sitemap?test#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap", RawQuery: "test", Fragment: "frag"}}},
-		{"rel-url-fragment", args{[]string{"/sitemap#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap", Fragment: "frag"}}},
-		{"rel-query-1", args{[]string{"/?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/", RawQuery: "test=1"}}},
-		{"rel-query-2", args{[]string{"?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php", RawQuery: "test=1"}}},
-		{"rel-query-string-fragment", args{[]string{"?test#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "", RawQuery: "test", Fragment: "frag"}}},
-		{"rel-query-string", args{[]string{"?test"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "", RawQuery: "test", Fragment: ""}}},
-		{"rel-php-query-1", args{[]string{"/test.php?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/test.php", RawQuery: "test=1"}}},
-		{"rel-php-query-2", args{[]string{"test.php?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/test.php", RawQuery: "test=1"}}},
-		{"rel-query-port-1", args{[]string{"/?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com:443", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com:443", Path: "/", RawQuery: "test=1"}}},
-		{"rel-query-port-2", args{[]string{"?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com:443", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com:443", Path: "", RawQuery: "test=1"}}},
-		{"rel-url-query-port", args{[]string{"/asdf/?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com:443", Path: "/test"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com:443", Path: "/asdf/", RawQuery: "test=1"}}},
-		{"rel-fragment-1", args{[]string{"/#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/", RawQuery: "", Fragment: "frag"}}},
-		{"rel-fragment-2", args{[]string{"#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php", RawQuery: "", Fragment: "frag"}}},
-		{"abs-url-1", args{[]string{"https://test.domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap"}}},
-		{"abs-url-2", args{[]string{"https://test.domain.com/sitemap/"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap/"}}},
+		{name: "rel-url-1", args: args{[]string{"/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap"}}},
+		{name: "rel-url-2", args: args{[]string{"/sitemap/"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap/"}}},
+		{name: "rel-url-3", args: args{[]string{"/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/home"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap"}}},
+		{name: "rel-php-1", args: args{[]string{"/test.php"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/test.php", RawQuery: ""}}},
+		{name: "rel-php-2", args: args{[]string{"test.php"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/test.php", RawQuery: ""}}},
+		{name: "rel-url-query-string", args: args{[]string{"/sitemap?test"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap", RawQuery: "test"}}},
+		{name: "rel-url-query-string-fragment", args: args{[]string{"/sitemap?test#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap", RawQuery: "test", Fragment: "frag"}}},
+		{name: "rel-url-fragment", args: args{[]string{"/sitemap#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap", Fragment: "frag"}}},
+		{name: "rel-query-1", args: args{[]string{"/?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/", RawQuery: "test=1"}}},
+		{name: "rel-query-2", args: args{[]string{"?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php", RawQuery: "test=1"}}},
+		{name: "rel-query-string-fragment", args: args{[]string{"?test#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "", RawQuery: "test", Fragment: "frag"}}},
+		{name: "rel-query-string", args: args{[]string{"?test"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "", RawQuery: "test", Fragment: ""}}},
+		{name: "rel-php-query-1", args: args{[]string{"/test.php?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/test.php", RawQuery: "test=1"}}},
+		{name: "rel-php-query-2", args: args{[]string{"test.php?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/test.php", RawQuery: "test=1"}}},
+		{name: "rel-query-port-1", args: args{[]string{"/?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com:443", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com:443", Path: "/", RawQuery: "test=1"}}},
+		{name: "rel-query-port-2", args: args{[]string{"?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com:443", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com:443", Path: "", RawQuery: "test=1"}}},
+		{name: "rel-url-query-port", args: args{[]string{"/asdf/?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com:443", Path: "/test"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com:443", Path: "/asdf/", RawQuery: "test=1"}}},
+		{name: "rel-fragment-1", args: args{[]string{"/#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/", RawQuery: "", Fragment: "frag"}}},
+		{name: "rel-fragment-2", args: args{[]string{"#frag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php", RawQuery: "", Fragment: "frag"}}},
+		{name: "abs-url-1", args: args{[]string{"https://test.domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap"}}},
+		{name: "abs-url-2", args: args{[]string{"https://test.domain.com/sitemap/"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "test.domain.com", Path: "/sitemap/"}}},
 
 		// On absolute URLs the reference URL should be ignored
-		{"abs-php-other-reference", args{[]string{"https://some.other-domain.com/test.php"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: ""}}},
-		{"abs-php-query-other-reference", args{[]string{"https://some.other-domain.com/test.php?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: "test=1"}}},
-		{"abs-fragment-other-reference", args{[]string{"https://some.other-domain.com/test.php#tag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: "", Fragment: "tag"}}},
-		{"abs-query-fragment-other-reference", args{[]string{"https://some.other-domain.com/test.php?test=1#tag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: "test=1", Fragment: "tag"}}},
-		{"abs-url-other-reference-1", args{[]string{"https://some.other-domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap"}}},
-		{"abs-url-other-reference-2", args{[]string{"https://some.other-domain.com/sitemap/"}, &url.URL{Scheme: "http", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap/"}}},
-		{"abs-url-other-reference-3", args{[]string{"https://some.other-domain.com/sitemap/?test#frag"}, &url.URL{Scheme: "http", Host: "test.domain.com", Path: ""}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap/", RawQuery: "test", Fragment: "frag"}}},
-		{"abs-url-other-reference-4", args{[]string{"https://some.other-domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "", RawQuery: "test", Fragment: "frag"}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap"}}},
-		{"abs-url-other-reference-5", args{[]string{"https://some.other-domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/home/", RawQuery: "test", Fragment: "frag"}}, []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap"}}},
+		{name: "abs-php-other-reference", args: args{[]string{"https://some.other-domain.com/test.php"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: ""}}},
+		{name: "abs-php-query-other-reference", args: args{[]string{"https://some.other-domain.com/test.php?test=1"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: "test=1"}}},
+		{name: "abs-fragment-other-reference", args: args{[]string{"https://some.other-domain.com/test.php#tag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: "", Fragment: "tag"}}},
+		{name: "abs-query-fragment-other-reference", args: args{[]string{"https://some.other-domain.com/test.php?test=1#tag"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/app/index.php"}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/test.php", RawQuery: "test=1", Fragment: "tag"}}},
+		{name: "abs-url-other-reference-1", args: args{[]string{"https://some.other-domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap"}}},
+		{name: "abs-url-other-reference-2", args: args{[]string{"https://some.other-domain.com/sitemap/"}, &url.URL{Scheme: "http", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap/"}}},
+		{name: "abs-url-other-reference-3", args: args{[]string{"https://some.other-domain.com/sitemap/?test#frag"}, &url.URL{Scheme: "http", Host: "test.domain.com", Path: ""}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap/", RawQuery: "test", Fragment: "frag"}}},
+		{name: "abs-url-other-reference-4", args: args{[]string{"https://some.other-domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "", RawQuery: "test", Fragment: "frag"}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap"}}},
+		{name: "abs-url-other-reference-5", args: args{[]string{"https://some.other-domain.com/sitemap"}, &url.URL{Scheme: "https", Host: "test.domain.com", Path: "/home/", RawQuery: "test", Fragment: "frag"}}, want: []*url.URL{{Scheme: "https", Host: "some.other-domain.com", Path: "/sitemap"}}},
 
 		// Unexpected input
-		{"unexpected-input-1", args{[]string{"name.surname@domain.tld"}, &url.URL{Scheme: "https", Host: "google.com"}}, []*url.URL{{Scheme: "https", Host: "google.com", Path: "/name.surname@domain.tld"}}},
+		{name: "unexpected-input-1", args: args{[]string{"name.surname@domain.tld"}, &url.URL{Scheme: "https", Host: "google.com"}}, want: []*url.URL{{Scheme: "https", Host: "google.com", Path: "/name.surname@domain.tld"}}},
 
 		// Parse error -> no result (Such have been observed "in the wild")
-		{"parse-err-1", args{[]string{"“https://www.domain.tld“"}, &url.URL{Scheme: "http", Host: "test.domain.tld:8010"}}, []*url.URL{}},
-		{"parse-err-2", args{[]string{"“https://www.domain.tld”"}, &url.URL{Scheme: "http", Host: "test.domain.tld:8010"}}, []*url.URL{}},
+		{name: "parse-err-1", args: args{[]string{"“https://www.domain.tld”"}, &url.URL{Scheme: "http", Host: "test.domain.tld:8010"}}, want: []*url.URL{}},
+		{name: "parse-err-2", args: args{[]string{"“https://www.domain.tld”"}, &url.URL{Scheme: "http", Host: "test.domain.tld:8010"}}, want: []*url.URL{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -332,23 +477,44 @@ func Test_linksToAbsoluteUrls(t *testing.T) {
 				if got == nil {
 					t.Error("got is nil!")
 				}
-				t.Errorf("linksToAbsoluteUrls() = '%v', want '%v'", got, tt.want)
+				t.Errorf("linksToAbsoluteUrls() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// Test_requestImageHash verifies that requestImageHash returns the expected MD5 hash for known favicon images.
 func Test_requestImageHash(t *testing.T) {
 
-	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	// Prepare unit test data
+	imgBytes1 := []byte("favicon-test-data-alpha")
+	imgBytes2 := []byte("favicon-test-data-beta")
+	h1 := md5.Sum(imgBytes1)
+	h2 := md5.Sum(imgBytes2)
+	wantHash1 := hex.EncodeToString(h1[:])
+	wantHash2 := hex.EncodeToString(h2[:])
 
-	// Prepare test variables
-	testRequester := utils.NewRequester(utils.ReuseNone, testSettings.HttpUserAgent, "", "", "", testSettings.HttpProxy, time.Minute, utils.InsecureTransportFactory, utils.ClientFactory)
+	// imageServer1/2 respond with image/x-icon and known bytes; noImageServer responds with text/html
+	imageServer1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/x-icon")
+		_, _ = w.Write(imgBytes1)
+	}))
+	t.Cleanup(imageServer1.Close)
+
+	imageServer2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/x-icon")
+		_, _ = w.Write(imgBytes2)
+	}))
+	t.Cleanup(imageServer2.Close)
+
+	noImageServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html></html>"))
+	}))
+	t.Cleanup(noImageServer.Close)
+
+	// Nil proxy so httptest servers are not routed through any corporate proxy
+	testRequester := utils.NewRequester(utils.ReuseNone, "", "", "", "", nil, 5*time.Second, utils.InsecureTransportFactory, utils.ClientFactory)
 
 	// Prepare and run test cases
 	type args struct {
@@ -361,32 +527,41 @@ func Test_requestImageHash(t *testing.T) {
 		args args
 		want string
 	}{
-		{"image-1", args{testRequester, "https://www.google.com/favicon.ico", "www.google.com"}, "8b92fa949c5562303273e59227f1e41c"},
-		{"image-2", args{testRequester, "https://www.amazon.com/favicon.ico", "www.amazon.com"}, "7c444d71f48980ca76f2c33b23c8bbe1"},
-		{"no-image-1", args{testRequester, "https://domain.tld/favicon.ico", ""}, ""},
+		{
+			name: "image-1",
+			args: args{testRequester, imageServer1.URL + "/favicon.ico", ""},
+			want: wantHash1,
+		},
+		{
+			name: "image-2",
+			args: args{testRequester, imageServer2.URL + "/favicon.ico", ""},
+			want: wantHash2,
+		},
+		{
+			name: "no-image-1",
+			args: args{testRequester, noImageServer.URL + "/favicon.ico", ""},
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := requestImageHash(tt.args.requester, tt.args.requestUrl, tt.args.vhost); got != tt.want {
-				t.Errorf("requestImageHash() = '%v', want '%v'", got, tt.want)
+				t.Errorf("requestImageHash() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// Test_streamToFile verifies that streamToFile writes an io.Reader stream to a file in the given output folder.
 func Test_streamToFile(t *testing.T) {
 
 	// Retrieve test logger
 	testLogger := utils.NewTestLogger()
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
+	// Prepare unit test data
 	testContent := "teststream"
 
 	// Prepare and run test cases
@@ -400,8 +575,18 @@ func Test_streamToFile(t *testing.T) {
 		testOutput string
 		wantErr    bool
 	}{
-		{"simple", args{testSettings.PathTmpDir, "output.txt"}, testContent, false},
-		{"complex", args{testSettings.PathTmpDir, "!\"§$%&/(()=?`*'_:;><,.-#+´ß0987654321^°|~\\}][{³²µ'`).txt"}, testContent, false},
+		{
+			name:       "simple",
+			args:       args{testSettings.PathTmpDir, "output.txt"},
+			testOutput: testContent,
+			wantErr:    false,
+		},
+		{
+			name:       "complex",
+			args:       args{testSettings.PathTmpDir, "!\"§$%&/(()=?`*'_:;><,.-#+´ß0987654321^°|~\\}][{³²µ'`).txt"},
+			testOutput: testContent,
+			wantErr:    false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -409,7 +594,7 @@ func Test_streamToFile(t *testing.T) {
 			p := filepath.Join(testSettings.PathTmpDir, oName)
 			source := bytes.NewReader([]byte(testContent))
 			if err := streamToFile(testLogger, source, tt.args.outputFolder, oName); (err != nil) != tt.wantErr {
-				t.Errorf("streamToFile() error = '%v', wantErr '%v'", err, tt.wantErr)
+				t.Errorf("streamToFile() error = '%v', wantErr = '%v'", err, tt.wantErr)
 				return
 			}
 			content, errRead := os.ReadFile(p)
@@ -418,7 +603,7 @@ func Test_streamToFile(t *testing.T) {
 				return
 			}
 			if string(content) != testContent {
-				t.Errorf("streamToFile() = '%v', wantOutput '%v'", string(content), tt.testOutput)
+				t.Errorf("streamToFile() = '%v', want = '%v'", string(content), tt.testOutput)
 				return
 			}
 			_ = os.Remove(p)
@@ -426,6 +611,37 @@ func Test_streamToFile(t *testing.T) {
 	}
 }
 
+// Test_streamToFile_FolderAutoCreate verifies that streamToFile automatically creates the output folder when it does not exist.
+func Test_streamToFile_FolderAutoCreate(t *testing.T) {
+
+	// Retrieve test logger
+	testLogger := utils.NewTestLogger()
+
+	// Prepare unit test data
+	parent := t.TempDir()
+	subDir := filepath.Join(parent, "sub")
+	content := "auto-create-test-content"
+
+	if _, errStat := os.Stat(subDir); !os.IsNotExist(errStat) {
+		t.Fatalf("Test_streamToFile_FolderAutoCreate() setup: folder should not exist yet")
+	}
+
+	// Prepare and run test cases
+	if err := streamToFile(testLogger, bytes.NewReader([]byte(content)), subDir, "output.txt"); err != nil {
+		t.Fatalf("streamToFile() error = '%v', want = nil", err)
+	}
+
+	// Verify output file was written with expected content
+	got, errRead := os.ReadFile(filepath.Join(subDir, "output.txt"))
+	if errRead != nil {
+		t.Fatalf("streamToFile() could not read output file: '%v'", errRead)
+	}
+	if string(got) != content {
+		t.Errorf("streamToFile() = '%v', want = '%v'", string(got), content)
+	}
+}
+
+// Test_parseRetryAfter verifies that parseRetryAfter correctly parses integer and HTTP-date Retry-After header values.
 func Test_parseRetryAfter(t *testing.T) {
 
 	const httpDateLayout = "Mon, 02 Jan 2006 15:04:05 MST"
@@ -440,12 +656,42 @@ func Test_parseRetryAfter(t *testing.T) {
 		want    uint64
 		wantErr bool
 	}{
-		{"int-1", args{"120"}, 120, false},
-		{"int-2", args{"20"}, 20, false},
-		{"int-3", args{"-12"}, 0, true},
-		{"time-1-format-1", args{time.Now().Add(time.Second * 120).Format(httpDateLayout)}, 120, false},
-		{"time-1-format-1", args{time.Now().Add(time.Second * 20).Format(httpDateLayout)}, 20, false},
-		{"time-1-format-1", args{time.Now().Add(time.Second * -12).Format(httpDateLayout)}, 0, true},
+		{
+			name:    "int-1",
+			args:    args{"120"},
+			want:    120,
+			wantErr: false,
+		},
+		{
+			name:    "int-2",
+			args:    args{"20"},
+			want:    20,
+			wantErr: false,
+		},
+		{
+			name:    "int-3",
+			args:    args{"-12"},
+			want:    0,
+			wantErr: true,
+		},
+		{
+			name:    "time-1-format-1",
+			args:    args{time.Now().UTC().Add(time.Second * 120).Format(httpDateLayout)},
+			want:    120,
+			wantErr: false,
+		},
+		{
+			name:    "time-1-format-1-2",
+			args:    args{time.Now().UTC().Add(time.Second * 20).Format(httpDateLayout)},
+			want:    20,
+			wantErr: false,
+		},
+		{
+			name:    "time-1-format-1-3",
+			args:    args{time.Now().UTC().Add(time.Second * -12).Format(httpDateLayout)},
+			want:    0,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -455,24 +701,95 @@ func Test_parseRetryAfter(t *testing.T) {
 
 			after, errParse := parseRetryAfter(&header)
 			if (errParse != nil) != tt.wantErr {
-				t.Errorf("parseRetryAfter() error = '%v', wantErr '%v'", errParse, tt.wantErr)
+				t.Errorf("parseRetryAfter() error = '%v', wantErr = '%v'", errParse, tt.wantErr)
 				return
 			}
 
 			if after != tt.want {
-				t.Errorf("parseRetryAfter() = '%v', want '%v'", after, tt.want)
+				t.Errorf("parseRetryAfter() = '%v', want = '%v'", after, tt.want)
 				return
 			}
 		})
 	}
 }
 
+// Test_parseRetryAfter_NilHeader verifies that parseRetryAfter returns an error when given a nil header pointer.
+func Test_parseRetryAfter_NilHeader(t *testing.T) {
+
+	// Verify nil header returns an error and zero duration
+	after, errParse := parseRetryAfter(nil)
+	if errParse == nil {
+		t.Errorf("parseRetryAfter() error = nil, want non-nil")
+	}
+	if after != 0 {
+		t.Errorf("parseRetryAfter() = '%v', want = '0'", after)
+	}
+}
+
+// Test_makeCounter verifies that makeCounter returns sequential values starting at the given offset and is safe for concurrent use.
+func Test_makeCounter(t *testing.T) {
+
+	t.Run("sequential", func(t *testing.T) {
+
+		// Verify sequential increments starting from the configured offset
+		counter := makeCounter(1)
+		for i := int32(1); i <= 5; i++ {
+			if got := counter(); got != i {
+				t.Errorf("makeCounter() call %d = '%v', want = '%v'", i, got, i)
+			}
+		}
+	})
+
+	t.Run("start-offset", func(t *testing.T) {
+
+		// Verify that the start parameter offsets the first returned value correctly
+		counter := makeCounter(10)
+		if got := counter(); got != 10 {
+			t.Errorf("makeCounter() first call = '%v', want = '10'", got)
+		}
+		if got := counter(); got != 11 {
+			t.Errorf("makeCounter() second call = '%v', want = '11'", got)
+		}
+	})
+
+	t.Run("concurrent", func(t *testing.T) {
+
+		// Verify that 100 concurrent callers each receive a unique value in [1, 100]
+		const goroutines = 100
+		counter := makeCounter(1)
+		var wg sync.WaitGroup
+		results := make([]int32, goroutines)
+
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				results[idx] = counter()
+			}(i)
+		}
+		wg.Wait()
+
+		// All returned values must be unique and within [1, 100]
+		seen := make(map[int32]bool, goroutines)
+		for _, v := range results {
+			if v < 1 || v > goroutines {
+				t.Errorf("makeCounter() concurrent = '%v', want in [1, %d]", v, goroutines)
+			}
+			if seen[v] {
+				t.Errorf("makeCounter() concurrent duplicate value = '%v'", v)
+			}
+			seen[v] = true
+		}
+	})
+}
+
+// TestCrawler_Test verifies that goroutine panics are caught and handled gracefully without propagating to the parent goroutine.
 func TestCrawler_Test(t *testing.T) {
 
 	// Recover potential panics to gracefully shut down scan
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Println(fmt.Sprintf("Unexpected panic: %s\n%s", r, utils.StacktraceIndented("\t")))
+			fmt.Printf("Unexpected panic: %s\n%s\n", r, utils.StacktraceIndented("\t"))
 		}
 	}()
 
@@ -482,21 +799,21 @@ func TestCrawler_Test(t *testing.T) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Println(fmt.Sprintf("Unexpected panic: %s\n%s", r, utils.StacktraceIndented("\t")))
+				fmt.Printf("Unexpected panic: %s\n%s\n", r, utils.StacktraceIndented("\t"))
 			}
 		}()
 
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Println(fmt.Sprintf("Unexpected panic: %s\n%s", r, utils.StacktraceIndented("\t")))
+					fmt.Printf("Unexpected panic: %s\n%s\n", r, utils.StacktraceIndented("\t"))
 				}
 			}()
 
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						fmt.Println(fmt.Sprintf("Unexpected panic: %s%s", r, utils.StacktraceIndented("\t")))
+						fmt.Printf("Unexpected panic: %s%s\n", r, utils.StacktraceIndented("\t"))
 						wg.Done()
 					}
 				}()
@@ -515,4 +832,276 @@ func TestCrawler_Test(t *testing.T) {
 
 	fmt.Println("Terminating")
 
+}
+
+// TestCrawler_Crawl verifies that Crawl fetches the entry page, follows links, and returns a completed result.
+func TestCrawler_Crawl(t *testing.T) {
+
+	// Retrieve test settings
+	testSettings := _test.GetSettings()
+
+	// Prepare unit test data
+	testLogger := utils.NewTestLogger()
+
+	// Serve two linked pages to exercise queue(), processResult(), and Crawl()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<html><body><a href="/page2">page2</a></body></html>`)
+	})
+	mux.HandleFunc("/page2", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<html><body>Page 2</body></html>`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	srvUrl, errParse := url.Parse(srv.URL)
+	if errParse != nil {
+		t.Fatalf("TestCrawler_Crawl() url.Parse() error = '%v', want = nil", errParse)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Prepare and run test cases
+	crawler, errNew := NewCrawler(
+		testLogger,
+		*srvUrl,
+		"",
+		false,
+		2,
+		true,
+		true,
+		false,
+		"",
+		"", "", "",
+		testSettings.HttpUserAgent,
+		nil,
+		5*time.Second,
+		DefaultFollowContentTypes,
+		DefaultDownloadContentTypes,
+		1,
+		ctx,
+	)
+	if errNew != nil {
+		t.Fatalf("NewCrawler() error = '%v', want = nil", errNew)
+	}
+
+	result := crawler.Crawl()
+
+	// Verify crawl completed with pages
+	if result == nil {
+		t.Fatalf("Crawl() result = nil, want = non-nil")
+	}
+	if result.Status != utils.StatusCompleted {
+		t.Errorf("Crawl() status = '%v', want = '%v'", result.Status, utils.StatusCompleted)
+	}
+	if len(result.Pages) < 1 {
+		t.Errorf("Crawl() pages count = '%v', want >= 1", len(result.Pages))
+	}
+}
+
+// TestCrawler_Crawl_Timeout verifies that Crawl returns StatusDeadline when the context expires during crawling.
+func TestCrawler_Crawl_Timeout(t *testing.T) {
+
+	// Retrieve test settings
+	testSettings := _test.GetSettings()
+
+	// Prepare unit test data
+	testLogger := utils.NewTestLogger()
+
+	// Slow server to trigger context deadline
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<html><body>slow</body></html>`)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvUrl, errParse := url.Parse(srv.URL)
+	if errParse != nil {
+		t.Fatalf("TestCrawler_Crawl_Timeout() url.Parse() error = '%v', want = nil", errParse)
+	}
+
+	// Context expires almost immediately
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	// Prepare and run test cases
+	crawler, errNew := NewCrawler(
+		testLogger,
+		*srvUrl,
+		"",
+		false,
+		2,
+		true,
+		true,
+		false,
+		"",
+		"", "", "",
+		testSettings.HttpUserAgent,
+		nil,
+		200*time.Millisecond,
+		DefaultFollowContentTypes,
+		DefaultDownloadContentTypes,
+		1,
+		ctx,
+	)
+	if errNew != nil {
+		t.Fatalf("NewCrawler() error = '%v', want = nil", errNew)
+	}
+
+	result := crawler.Crawl()
+
+	// Verify timeout is reported
+	if result == nil {
+		t.Fatalf("Crawl() result = nil, want = non-nil")
+	}
+	if result.Status != utils.StatusDeadline {
+		t.Errorf("Crawl() status = '%v', want = '%v'", result.Status, utils.StatusDeadline)
+	}
+}
+
+// TestCrawler_Crawl_Requeue verifies that Crawl retries a child page after a 429 Too Many Requests response.
+func TestCrawler_Crawl_Requeue(t *testing.T) {
+
+	// Retrieve test settings
+	testSettings := _test.GetSettings()
+
+	// Prepare unit test data
+	testLogger := utils.NewTestLogger()
+
+	// Root serves HTML with a link to /child; /child returns 429 on first call then 200 on subsequent calls,
+	// exercising the requeue() path (child URL must be known via queue() before requeue() can re-add it)
+	var childCallCount int
+	var callMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		if r.URL.Path != "/child" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = fmt.Fprint(w, `<html><body><a href="/child">child</a></body></html>`)
+			return
+		}
+
+		callMu.Lock()
+		n := childCallCount
+		childCallCount++
+		callMu.Unlock()
+
+		if n == 0 {
+			w.WriteHeader(http.StatusTooManyRequests) // No Retry-After → 200 ms delay
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<html><body>ok</body></html>`)
+	}))
+	t.Cleanup(srv.Close)
+
+	srvUrl, errParse := url.Parse(srv.URL)
+	if errParse != nil {
+		t.Fatalf("TestCrawler_Crawl_Requeue() url.Parse() error = '%v', want = nil", errParse)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Prepare and run test cases
+	crawler, errNew := NewCrawler(
+		testLogger,
+		*srvUrl,
+		"",
+		false,
+		1, // depth=1 so root links are followed and /child is queued via queue(), making it requeue()-eligible
+		false,
+		true,
+		false,
+		"",
+		"", "", "",
+		testSettings.HttpUserAgent,
+		nil,
+		5*time.Second,
+		DefaultFollowContentTypes,
+		DefaultDownloadContentTypes,
+		1,
+		ctx,
+	)
+	if errNew != nil {
+		t.Fatalf("NewCrawler() error = '%v', want = nil", errNew)
+	}
+
+	result := crawler.Crawl()
+
+	// Verify crawl completed without exception after retrying the 429
+	if result == nil {
+		t.Fatalf("Crawl() result = nil, want = non-nil")
+	}
+	if result.Status != utils.StatusCompleted {
+		t.Errorf("Crawl() status = '%v', want = '%v'", result.Status, utils.StatusCompleted)
+	}
+}
+
+// TestCrawler_Crawl_Download verifies that Crawl records download URLs for responses with download content types.
+func TestCrawler_Crawl_Download(t *testing.T) {
+
+	// Retrieve test settings
+	testSettings := _test.GetSettings()
+
+	// Prepare unit test data
+	testLogger := utils.NewTestLogger()
+
+	// Serve a page linking to a PDF to exercise the download branch in processTask()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<html><body><a href="/doc.pdf">doc</a></body></html>`)
+	})
+	mux.HandleFunc("/doc.pdf", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = fmt.Fprint(w, "%PDF-1.4 test")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	srvUrl, errParse := url.Parse(srv.URL)
+	if errParse != nil {
+		t.Fatalf("TestCrawler_Crawl_Download() url.Parse() error = '%v', want = nil", errParse)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Prepare and run test cases
+	crawler, errNew := NewCrawler(
+		testLogger,
+		*srvUrl,
+		"",
+		false,
+		2,
+		true,
+		true,
+		false,
+		"",
+		"", "", "",
+		testSettings.HttpUserAgent,
+		nil,
+		5*time.Second,
+		DefaultFollowContentTypes,
+		DefaultDownloadContentTypes,
+		1,
+		ctx,
+	)
+	if errNew != nil {
+		t.Fatalf("NewCrawler() error = '%v', want = nil", errNew)
+	}
+
+	result := crawler.Crawl()
+
+	// Verify PDF URL was discovered as a download
+	if result == nil {
+		t.Fatalf("Crawl() result = nil, want = non-nil")
+	}
+	if len(result.DiscoveredDownloads) == 0 {
+		t.Errorf("Crawl() DiscoveredDownloads count = '0', want >= 1")
+	}
 }

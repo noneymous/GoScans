@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,22 +11,49 @@
 package webenum
 
 import (
-	"github.com/siemens/GoScans/_test"
-	"github.com/siemens/GoScans/utils"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/siemens/GoScans/_test"
+	"github.com/siemens/GoScans/utils"
 )
 
+// TestMain initializes the test environment and runs all tests in the webenum package.
+func TestMain(m *testing.M) {
+
+	// Retrieve test settings
+	_test.GetSettings()
+
+	// Prepare test directory
+	tmpDir, errTmp := os.MkdirTemp(".", "goscans-webenum-test-*")
+	if errTmp != nil {
+		panic(errTmp)
+	}
+	if errChdir := os.Chdir(tmpDir); errChdir != nil {
+		panic(errChdir)
+	}
+
+	// Run tests
+	code := m.Run()
+
+	// Prepare cleanup
+	_ = os.Chdir("..")
+	_ = os.RemoveAll(tmpDir)
+
+	// Return nil as everything went fine
+	os.Exit(code)
+}
+
+// TestNewScanner verifies that NewScanner returns an error for invalid arguments and succeeds for valid ones.
 func TestNewScanner(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
 	// Prepare test variables
 	testLogger := utils.NewTestLogger()
@@ -54,19 +81,71 @@ func TestNewScanner(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"valid-basic", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", sampleProbes, true, "", time.Minute}, false},
-		{"valid-no-robots", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", sampleProbes, false, "", time.Minute}, false},
-		{"valid-no-vhosts", args{testLogger, "domain.tld", 443, []string{}, true, "", "", "", sampleProbes, true, "", time.Minute}, false},
-		{"invalid-broken-probes", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", sampleProbesBroken, true, "", time.Minute}, true},
-		{"invalid-probes-path", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "", time.Minute}, true},
-		{"invalid-proxy-1", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "localhost:8080", time.Minute}, true},
-		{"invalid-proxy-2", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "no url", time.Minute}, true},
-		{"invalid-target-1", args{testLogger, "not existing", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "", time.Minute}, true},
-		{"invalid-target-2", args{testLogger, "192.168.0.1/24", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "", time.Minute}, true},
-		{"incomplete-ntlm-creds-1", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "wrong", "", "", sampleProbes, true, "", time.Minute}, true},
-		{"incomplete-ntlm-creds-2", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "wrong", "", sampleProbes, true, "", time.Minute}, true},
-		{"incomplete-ntlm-creds-3", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "wrong", sampleProbes, true, "", time.Minute}, true},
-		{"invalid-path", args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "?", true, "", time.Minute}, true},
+		{
+			name:    "valid-basic",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", sampleProbes, true, "", time.Minute},
+			wantErr: false,
+		},
+		{
+			name:    "valid-no-robots",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", sampleProbes, false, "", time.Minute},
+			wantErr: false,
+		},
+		{
+			name:    "valid-no-vhosts",
+			args:    args{testLogger, "domain.tld", 443, []string{}, true, "", "", "", sampleProbes, true, "", time.Minute},
+			wantErr: false,
+		},
+		{
+			name:    "invalid-broken-probes",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", sampleProbesBroken, true, "", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-probes-path",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-proxy-1",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "localhost:8080", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-proxy-2",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "no url", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-target-1",
+			args:    args{testLogger, "not existing", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-target-2",
+			args:    args{testLogger, "192.168.0.1/24", 443, []string{"domain.tld"}, true, "", "", "", "probes.txt", true, "", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "incomplete-ntlm-creds-1",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "wrong", "", "", sampleProbes, true, "", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "incomplete-ntlm-creds-2",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "wrong", "", sampleProbes, true, "", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "incomplete-ntlm-creds-3",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "wrong", sampleProbes, true, "", time.Minute},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-path",
+			args:    args{testLogger, "domain.tld", 443, []string{"domain.tld"}, true, "", "", "", "?", true, "", time.Minute},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,18 +161,24 @@ func TestNewScanner(t *testing.T) {
 	}
 }
 
+// TestLoadProbes verifies that loadProbes parses a valid probes file and returns an error for broken files.
 func TestLoadProbes(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
 	// Prepare test variables
 	sampleProbes := filepath.Join(testSettings.PathDataDir, "webenum", "webenum_sample_probes.txt")
 	sampleProbesBroken := filepath.Join(testSettings.PathDataDir, "webenum", "webenum_sample_probes_broken.txt")
+
+	// Prepare an empty probes file in the isolated test directory
+	emptyFile, errEmpty := os.CreateTemp(".", "empty-probes-*.txt")
+	if errEmpty != nil {
+		t.Fatalf("TestLoadProbes could not create empty probes file: '%v'", errEmpty)
+	}
+	_ = emptyFile.Close()
+	emptyPath := emptyFile.Name()
+	defer func() { _ = os.Remove(emptyPath) }()
 
 	// Prepare and run test cases
 	tests := []struct {
@@ -102,8 +187,30 @@ func TestLoadProbes(t *testing.T) {
 		want    []Probe
 		wantErr bool
 	}{
-		{"valid", sampleProbes, []Probe{{"Apache default content", "/icons/", []string(nil)}, {"Git", "/git/", []string(nil)}, {"Git", "/users/sign_in", []string{"href=\"https://about.gitlab.com/\"", "GitLab"}}, {"PhpMyAdmin", "/php-myadmin/", []string(nil)}, {"PhpMyAdmin", "/phpmyadmin/index.php", []string{"<input type=\"text\" name=\"pma_username\" id=\"input_username\"", "<label for=\"select_server\">", "function PMA_focusInput()"}}, {"Entitlement POST Form", "/wahtever/", []string{"<input type=\"hidden\" name=\"SAMLRequest\""}}}, false},
-		{"broken", sampleProbesBroken, []Probe(nil), true},
+		{
+			name:    "valid",
+			path:    sampleProbes,
+			want:    []Probe{{"Apache default content", "/icons/", []string(nil)}, {"Git", "/git/", []string(nil)}, {"Git", "/users/sign_in", []string{"href=\"https://about.gitlab.com/\"", "GitLab"}}, {"PhpMyAdmin", "/php-myadmin/", []string(nil)}, {"PhpMyAdmin", "/phpmyadmin/index.php", []string{"<input type=\"text\" name=\"pma_username\" id=\"input_username\"", "<label for=\"select_server\">", "function PMA_focusInput()"}}, {"Entitlement POST Form", "/wahtever/", []string{"<input type=\"hidden\" name=\"SAMLRequest\""}}},
+			wantErr: false,
+		},
+		{
+			name:    "broken",
+			path:    sampleProbesBroken,
+			want:    []Probe(nil),
+			wantErr: true,
+		},
+		{
+			name:    "nonexistent-file",
+			path:    "nonexistent-probes-file.txt",
+			want:    []Probe(nil),
+			wantErr: true,
+		},
+		{
+			name:    "empty-file",
+			path:    emptyPath,
+			want:    []Probe(nil),
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -119,17 +226,44 @@ func TestLoadProbes(t *testing.T) {
 	}
 }
 
+// robotsTxt is the static robots.txt served by the test server for the "valid" case.
+const robotsTxt = `User-agent: *
+Disallow: *cr-dokumentation.pdf$
+Disallow: /gutscheine/suche?
+Disallow: /gutscheine/*?code=*
+Disallow: /gutscheine/*&code=*
+Sitemap: https://www.spiegel.de/sitemaps/news-de.xml
+Sitemap: https://www.spiegel.de/sitemaps/videos/sitemap.xml
+Sitemap: https://www.spiegel.de/plus/sitemap.xml
+Sitemap: https://www.spiegel.de/sitemap.xml
+Sitemap: https://www.spiegel.de/gutscheine/sitemap.xml
+`
+
+// TestLoadProbesRobots verifies that loadProbesRobots fetches and parses a robots.txt file into probes.
 func TestLoadProbesRobots(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
-	// Prepare test variables
-	testRequester := utils.NewRequester(utils.ReuseNone, "", "", "", testSettings.HttpUserAgent, testSettings.HttpProxy, time.Second*8, utils.InsecureTransportFactory, utils.ClientFactory)
+	// Set up test HTTP servers to avoid live internet dependency.
+	robotsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(robotsTxt))
+	}))
+	t.Cleanup(robotsServer.Close)
+
+	noRobotsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(noRobotsServer.Close)
+
+	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	t.Cleanup(errorServer.Close)
+
+	// Prepare test variables. No proxy is used so httptest loopback servers are reached directly.
+	testRequester := utils.NewRequester(utils.ReuseNone, "", "", "", testSettings.HttpUserAgent, nil, time.Second*8, utils.InsecureTransportFactory, utils.ClientFactory)
 
 	// Prepare and run test cases
 	type args struct {
@@ -143,19 +277,42 @@ func TestLoadProbesRobots(t *testing.T) {
 		want    []Probe
 		wantErr bool
 	}{
-		{"invalid-url", args{"https://reallynotexisting.com:443/robots.txt", "reallynotexisting.com", ""}, []Probe(nil), true},
-		{"no-robots", args{"https://www.sap.de:443/robots.txt", "www.sap.de", ""}, []Probe(nil), false},
-		{"valid", args{"https://www.spiegel.de/robots.txt", "www.spiegel.de", ""}, []Probe{
-			{"Disallowed by robots.txt", "*cr-dokumentation.pdf$", []string(nil)},
-			{"Disallowed by robots.txt", "gutscheine/suche?", []string(nil)},
-			{"Disallowed by robots.txt", "gutscheine/*?code=*", []string(nil)},
-			{"Disallowed by robots.txt", "gutscheine/*&code=*", []string(nil)},
-			{"Sitemap by robots.txt", "sitemaps/news-de.xml", []string(nil)},
-			{"Sitemap by robots.txt", "sitemaps/videos/sitemap.xml", []string(nil)},
-			{"Sitemap by robots.txt", "plus/sitemap.xml", []string(nil)},
-			{"Sitemap by robots.txt", "sitemap.xml", []string(nil)},
-			{"Sitemap by robots.txt", "gutscheine/sitemap.xml", []string(nil)},
-		}, false},
+		{
+			// Port 1 is always refused. Connection-refused is a reliable non-DNS error.
+			name:    "invalid-url",
+			args:    args{"http://127.0.0.1:1/robots.txt", "127.0.0.1", ""},
+			want:    []Probe(nil),
+			wantErr: true,
+		},
+		{
+			name:    "no-robots",
+			args:    args{noRobotsServer.URL + "/robots.txt", "no-robots-host", ""},
+			want:    []Probe(nil),
+			wantErr: false,
+		},
+		{
+			name:    "server-error",
+			args:    args{errorServer.URL + "/robots.txt", "error-host", ""},
+			want:    []Probe(nil),
+			wantErr: false,
+		},
+		{
+			// Served by a local httptest.Server to avoid live-data drift.
+			name: "valid",
+			args: args{robotsServer.URL + "/robots.txt", "www.spiegel.de", ""},
+			want: []Probe{
+				{"Disallowed by robots.txt", "*cr-dokumentation.pdf$", []string(nil)},
+				{"Disallowed by robots.txt", "gutscheine/suche?", []string(nil)},
+				{"Disallowed by robots.txt", "gutscheine/*?code=*", []string(nil)},
+				{"Disallowed by robots.txt", "gutscheine/*&code=*", []string(nil)},
+				{"Sitemap by robots.txt", "sitemaps/news-de.xml", []string(nil)},
+				{"Sitemap by robots.txt", "sitemaps/videos/sitemap.xml", []string(nil)},
+				{"Sitemap by robots.txt", "plus/sitemap.xml", []string(nil)},
+				{"Sitemap by robots.txt", "sitemap.xml", []string(nil)},
+				{"Sitemap by robots.txt", "gutscheine/sitemap.xml", []string(nil)},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -172,6 +329,7 @@ func TestLoadProbesRobots(t *testing.T) {
 	}
 }
 
+// TestPathsFromRobotsLine verifies that pathsFromRobotsLine splits comma-separated values from a robots.txt line.
 func TestPathsFromRobotsLine(t *testing.T) {
 
 	// Prepare and run test cases
@@ -180,10 +338,12 @@ func TestPathsFromRobotsLine(t *testing.T) {
 		line string
 		want []string
 	}{
-		{"sample-1", "key: val1, val2, val3", []string{"val1", "val2", "val3"}},
-		{"sample-2", "key: val1,val2", []string{"val1", "val2"}},
-		{"sample-3", "key : val1, val2, val3", []string{"val1", "val2", "val3"}},
-		{"sample-4", "key: val1, val2, val3, ", []string{"val1", "val2", "val3"}},
+		{name: "sample-1", line: "key: val1, val2, val3", want: []string{"val1", "val2", "val3"}},
+		{name: "sample-2", line: "key: val1,val2", want: []string{"val1", "val2"}},
+		{name: "sample-3", line: "key : val1, val2, val3", want: []string{"val1", "val2", "val3"}},
+		{name: "sample-4", line: "key: val1, val2, val3, ", want: []string{"val1", "val2", "val3"}},
+		{name: "empty-value", line: "key: ", want: []string{}},
+		{name: "no-colon", line: "no-colon-line", want: []string{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

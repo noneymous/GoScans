@@ -1,13 +1,14 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package discovery implements a host discovery scan module using Nmap and related protocols.
 package discovery
 
 import (
@@ -15,10 +16,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/Ullaakut/nmap/v3"
-	"github.com/siemens/GoScans/discovery/active_directory"
-	"github.com/siemens/GoScans/discovery/netapi"
-	"github.com/siemens/GoScans/utils"
 	"io"
 	"net"
 	"os"
@@ -28,10 +25,16 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/Ullaakut/nmap/v3"
+	"github.com/siemens/GoScans/discovery/ad"
+	"github.com/siemens/GoScans/discovery/netapi"
+	"github.com/siemens/GoScans/discovery/ot"
+	"github.com/siemens/GoScans/utils"
 )
 
 const Label = "Discovery"
-const firewallRuleName = "Nmap-LSD" // Name assigned to the firewall rule created on Windows
+const firewallRuleName = "Nmap-LSD" //lint:ignore U1000 used in discovery_windows.go, invisible on Linux builds
 
 var defaultScriptsOnce sync.Once
 var defaultScripts = []string{ // List of default scripts to be executed
@@ -109,6 +112,7 @@ type Service struct {
 }
 
 type Host struct {
+	MacAddress      string
 	Ip              string
 	DnsName         string
 	OtherNames      []string
@@ -129,7 +133,7 @@ type Host struct {
 	Owner      string // Optional attribute that could be filled by the agent with asset inventory information
 	Critical   bool   // Optional attribute that could be filled by the agent with asset inventory information
 
-	Ad *active_directory.Ad
+	Ad *ad.Ad
 }
 
 type Result struct {
@@ -159,6 +163,7 @@ type Scanner struct {
 	nmapParameters    []string      // List of Nmap scan arguments
 	nmapVersionAll    bool          // Toggle to enable/disable extensive version detection
 	nmapBlacklistFile string        // Path to blacklist list of targets to be skipped at any case
+	otScanner         *ot.Scanner   // Filling out this attribute enables OT discovery scan. This is required to execute L2 OT discovery scripts. Leave empty to skip executing additional OT-related NSE scripts.
 	ldapConf          ldapConf      // Struct holding LDAP configuration data, ready to be passed on as single value
 	excludeDomains    []string      // Domains to be ignored when discovered
 	dialTimeout       time.Duration // The duration a dial is allowed to take before it will be canceled.
@@ -192,6 +197,11 @@ func NewScanner(
 
 	// Check whether input target is valid
 	for _, target := range targets {
+
+		// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+		target = strings.TrimSpace(target)
+
+		// Check whether input target is valid
 		if !utils.IsValidAddress(target) && !utils.IsValidIpRange(target) {
 			return nil, fmt.Errorf("invalid target '%s'", target)
 		}
@@ -245,10 +255,10 @@ func NewScanner(
 	// Compile list of Nmap configurations
 	var options []nmap.Option
 	options = append(options, nmap.WithBinaryPath(nmapPath))
-	options = append(options, nmap.WithCustomArguments(nmapArgs...))
-	options = append(options, nmap.WithCustomArguments(forceArgs...))
+	options = append(options, nmap.WithCustomArguments(nmapArgs...))  //lint:ignore SA1019 needed for raw nmap argument pass-through in security scanning
+	options = append(options, nmap.WithCustomArguments(forceArgs...)) //lint:ignore SA1019 needed for raw nmap argument pass-through in security scanning
 	options = append(options, nmap.WithScripts(defaultScripts...))
-	if nmapVersionAll == true {
+	if nmapVersionAll {
 		options = append(options, nmap.WithVersionAll())
 	}
 	if len(nmapBlacklist) > 0 {
@@ -281,6 +291,7 @@ func NewScanner(
 		nmapArgs,
 		nmapVersionAll,
 		nmapBlacklistFile,
+		nil, // Initially, the optional OT discovery scan is disabled. Call EnableOtScanner() to initialize.
 		ldapConf{
 			ldapServer,
 			ldapDomain,
@@ -298,6 +309,24 @@ func NewScanner(
 
 	// Return scan struct
 	return &scan, nil
+}
+
+// EnableOtScanner initializes the OT discovery scanner (PROFINET DCP, EtherCAT, LLDP, etc.)
+// and enables OT discovery scanning. A network interface to use for the OT scans must be defined.
+// The OT scan can only target a local L2 network segment. sets the network interface for
+func (s *Scanner) EnableOtScanner(nwInterface string) error {
+
+	// Initialize OT discovery scanner
+	otScanner, errOtScanner := ot.NewScanner(s.logger, nwInterface)
+	if errOtScanner != nil {
+		return errOtScanner
+	}
+
+	// Assign OT discovery scanner to discovery scanner
+	s.otScanner = otScanner
+
+	// Return nil as everything went fine
+	return nil
 }
 
 // Run starts scan execution. This must either be executed as a goroutine, or another thread must be active listening
@@ -339,7 +368,8 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 			case <-s.procCtx.Done():
 				// Quit goroutine
 			case <-time.After(timeout):
-				s.procCtxCancel() // Cancel proc context and quit goroutine
+				s.logger.Errorf("Nmap scan of '%s' killed after timeout.", s.targetDescription) // You should preferably make sure Nmap gracefully ends e.g. using --host-timeout
+				s.procCtxCancel()                                                               // Cancel proc context and quit goroutine
 			}
 		}()
 	}
@@ -418,7 +448,7 @@ func (s *Scanner) execute() *Result {
 			return &Result{
 				nil,
 				utils.StatusFailed,
-				false,
+				false, // Intended shutdown
 			}
 		default:
 
@@ -429,7 +459,7 @@ func (s *Scanner) execute() *Result {
 				return &Result{
 					nil,
 					utils.StatusFailed,
-					false,
+					false, // Intended shutdown
 				}
 			}
 
@@ -441,7 +471,23 @@ func (s *Scanner) execute() *Result {
 				return &Result{
 					nil,
 					utils.StatusFailed,
-					false,
+					false, // Intended shutdown
+				}
+			}
+
+			// Re-check interrupt channel with a short timeout before treating parse errors as
+			// exceptions. The non-blocking select above can miss the OS signal due to goroutine
+			// scheduling, even though Nmap was already killed by it.
+			if errors.Is(errRun, nmap.ErrParseOutput) {
+				select {
+				case <-interrupt:
+					s.logger.Infof("Nmap aborted due to interrupt.")
+					return &Result{
+						nil,
+						utils.StatusFailed,
+						false, // Intended shutdown
+					}
+				case <-time.After(100 * time.Millisecond):
 				}
 			}
 
@@ -459,9 +505,9 @@ func (s *Scanner) execute() *Result {
 					exceptionMsg += fmt.Sprintf("\n%s", warning)
 				}
 			} else if errors.Is(errRun, nmap.ErrMallocFailed) {
-				exceptionMsg = fmt.Sprintf("Nmap could not scan such large target network.")
+				exceptionMsg = "Nmap could not scan such large target network."
 			} else if errors.Is(errRun, nmap.ErrResolveName) { // Critical resolve error only thrown if related to blacklist hosts
-				exceptionMsg = fmt.Sprintf("Nmap could not resolve host(s) on exclude list.")
+				exceptionMsg = "Nmap could not resolve host(s) on exclude list."
 			} else {
 				exceptionMsg = fmt.Sprintf("Nmap scan failed with unexpected error: %s", errRun)
 			}
@@ -474,6 +520,33 @@ func (s *Scanner) execute() *Result {
 				nil,
 				exceptionMsg,
 				true,
+			}
+		}
+	}
+
+	// Execute L2 OT discovery scan if configured. Independent of the Nmap IP scan; run here so its
+	// findings survive the resolve/blacklist/nil-result checks below.
+	hostsOt := make([]ot.Host, 0)
+	if s.otScanner != nil {
+		s.logger.Debugf("Executing OT discovery on interface '%s'.", s.otScanner.NetworkInterface)
+		hostsOt = s.otScanner.Run()
+
+		// Abort early with OT results, if
+		//   - OT results have been discovered
+		//   - Nmap failed or didn't deliver results
+		// There is no need to try to read and post-process Nmap results.
+		resultsNmap := result != nil && len(result.Hosts) > 0
+		if len(hostsOt) > 0 && !resultsNmap {
+
+			// Append OT discovery results
+			results = appendMissingOtHosts(s.logger, hostsOt, nil, results)
+
+			// Return pointer to result struct
+			s.logger.Debugf("Returning OT scan result.")
+			return &Result{
+				results,
+				utils.StatusCompleted,
+				false,
 			}
 		}
 	}
@@ -503,10 +576,10 @@ func (s *Scanner) execute() *Result {
 
 	// Abort if result is nil, which it should not be at this stage
 	if result == nil {
-		msg := fmt.Sprintf("No nmap result, although expected!")
+		msg := "No nmap result, although expected!"
 		s.logger.Errorf(msg)
 
-		// Return result set indicating critical error.
+		// Return critical error unless OT discovery found devices to report
 		return &Result{
 			nil,
 			msg,
@@ -530,11 +603,25 @@ func (s *Scanner) execute() *Result {
 	// Prepare wait group for post-processing goroutines
 	var wgHosts sync.WaitGroup
 
+	// Prepare memory of MAC addresses found during port scan
+	seenMacs := make(map[string]struct{}, 0)
+
 	// Read scan result and fill results structure
 	for _, h := range result.Hosts {
 
-		// Defining host IP
-		ip := h.Addresses[0].String()
+		// Prepare memory for host attributes
+		var ip string
+		var macAddress string
+
+		// Extract Host IP and MAC
+		for _, addr := range h.Addresses {
+			if ip == "" && addr.AddrType != "mac" { // Extract primary host IP
+				ip = addr.String()
+			}
+			if macAddress == "" && addr.AddrType == "mac" { // Extract MAC address if available (L2 adjacency + privileged scan required)
+				macAddress = addr.String()
+			}
+		}
 
 		// Skip offline Hosts
 		if h.Status.State != "up" { // State will ALWAYS be "up" if nmap's host discovery is skipped
@@ -552,13 +639,13 @@ func (s *Scanner) execute() *Result {
 
 		// Extract NSE scripts run against the host
 		s.logger.Debugf("Extracting script data of '%s'.", ip)
-		hostnamesHostScripts, osSmb, hostScripts := extractHostScriptData(h.HostScripts)
+		scriptsHost, hostnamesScriptsHost, osSmb := extractHostScriptData(h.HostScripts)
 
 		// Extract NSE scripts run against the host's ports
-		hostnamesPortScripts, sslPorts, portScripts := extractPortScriptData(h.Ports)
+		scriptsPort, hostnamesScriptsPort, sslPorts := extractPortScriptData(h.Ports)
 
 		// Concatenate host and port scripts
-		scripts := append(hostScripts, portScripts...)
+		scripts := append(scriptsHost, scriptsPort...)
 
 		// If Nmap host discovery is disabled, all hosts are shown as "up", but we don't want to bloat our
 		// Result database with ghost host entries.
@@ -570,22 +657,50 @@ func (s *Scanner) execute() *Result {
 				len(services), len(scripts), ip)
 		}
 
+		// Extract host-related data from OT discovery to enrich Nmap scan results.
+		// Devices found during OT discovery but not by Nmap will be injected later.
+		var hostnamesOt []string
+		if len(hostsOt) > 0 {
+			s.logger.Debugf("Extracting OT data of '%s'.", ip)
+			for _, hostOt := range hostsOt {
+				if (ip != "" && ip == hostOt.Ip) || (macAddress != "" && macAddress == hostOt.MacAddress) {
+
+					// Extract hostname from OT results
+					if hostOt.DnsName != "" {
+						hostnamesOt = append(hostnamesOt, hostOt.DnsName)
+					}
+
+					// Extract MAC from OT results, if missing
+					if macAddress == "" {
+						macAddress = hostOt.MacAddress
+					}
+
+					// Extract OS guess from OT results, if missing
+					if len(osGuesses) == 0 {
+						osGuesses = []string{hostOt.OsGuess}
+					}
+				}
+			}
+		}
+
 		// Merge discovered hostnames
 		s.logger.Debugf("Merging discovered hostnames of '%s'.", ip)
 		hostnames = append(hostnames, hostnamesServices...)
-		hostnames = append(hostnames, hostnamesHostScripts...)
-		hostnames = append(hostnames, hostnamesPortScripts...)
+		hostnames = append(hostnames, hostnamesScriptsHost...)
+		hostnames = append(hostnames, hostnamesScriptsPort...)
+		hostnames = append(hostnames, hostnamesOt...)
 
 		// Add original discovery input hostname if Nmap hasn't discovered it. Nmap first resolves input
 		// hostnames to IP addresses and proceeds ignoring the original input hostname. It might not be able to
 		// rediscover it throughout the scan.
-		originalHostname, _ := s.procInputs[ip]
+		originalHostname := s.procInputs[ip]
 		if len(originalHostname) != 0 && !utils.StrContained(originalHostname, hostnames) {
 			hostnames = append(hostnames, originalHostname)
 		}
 
 		// Create host struct
 		hData := Host{
+			MacAddress:      macAddress,
 			Ip:              ip,
 			DnsName:         "",         // To be decided later after extracting SANs
 			OtherNames:      hostnames,  // To be updated later after deciding DNS name from it
@@ -600,15 +715,20 @@ func (s *Scanner) execute() *Result {
 			RdpUsers:        []string{}, // To be added asynchronously later during user extraction
 			Services:        services,
 			Scripts:         scripts,
-			Company:         "",                     // To be added asynchronously later by asset inventory lookup
-			Department:      "",                     // To be added asynchronously later by asset inventory lookup
-			Owner:           "",                     // To be added asynchronously later by asset inventory lookup
-			Ad:              &active_directory.Ad{}, // To be added asynchronously later by asset AD lookup
+			Company:         "",       // To be added asynchronously later by asset inventory lookup
+			Department:      "",       // To be added asynchronously later by asset inventory lookup
+			Owner:           "",       // To be added asynchronously later by asset inventory lookup
+			Ad:              &ad.Ad{}, // To be added asynchronously later by asset AD lookup
 		}
 
 		// Add reference of host struct to results. The actual host struct may be altered subsequently by
 		// post-processing launched goroutines.
 		results = append(results, &hData)
+
+		// Remember MAC addresses that are now part of the result data
+		if macAddress != "" {
+			seenMacs[macAddress] = struct{}{}
+		}
 
 		// Initiate asynchronous post-processing to collect additional host data.
 		// This will enrich host results with additional information that can be gathered from the remote host. E.g.,
@@ -634,6 +754,11 @@ func (s *Scanner) execute() *Result {
 	s.logger.Debugf("Waiting for all post-processing to complete.")
 	wgHosts.Wait()
 
+	// Injecting missing OT discovery hosts
+	if len(hostsOt) > 0 {
+		results = appendMissingOtHosts(s.logger, hostsOt, seenMacs, results)
+	}
+
 	// Return pointer to result struct
 	s.logger.Debugf("Returning scan result.")
 	return &Result{
@@ -641,6 +766,49 @@ func (s *Scanner) execute() *Result {
 		utils.StatusCompleted,
 		false,
 	}
+}
+
+// appendMissingOtHosts iterates available OT scan results and appends them if the same MAC was not seen before.
+func appendMissingOtHosts(logger utils.Logger, hostsOt []ot.Host, seenMacs map[string]struct{}, results []*Host) []*Host {
+
+	// Iterating OT data to inject into results
+	logger.Debugf("Injecting OT data.")
+	for _, hostOt := range hostsOt {
+
+		// Prepare identifier for host
+		identifier := hostOt.DnsName
+		if identifier == "" {
+			identifier = hostOt.Ip
+		}
+		if identifier == "" {
+			identifier = hostOt.MacAddress
+		}
+
+		// Skip injecting hosts with already existing MAC addresses
+		if hostOt.MacAddress != "" {
+			if _, seen := seenMacs[hostOt.MacAddress]; seen {
+				logger.Debugf("Injecting OT data of '%s' skipped. MAC already contained.", hostOt.MacAddress)
+				continue
+			}
+		}
+
+		// Inject devices exclusively found via OT discovery
+		logger.Debugf("Injecting OT data of '%s'.", identifier)
+		results = append(results, &Host{
+			MacAddress: hostOt.MacAddress,
+			Ip:         hostOt.Ip,
+			DnsName:    hostOt.DnsName,
+			OtherNames: []string{},
+			OtherIps:   []string{},
+			Hops:       []string{},
+			OsGuesses:  []string{hostOt.OsGuess},
+			Services:   []Service{},
+			Scripts:    []Script{},
+		})
+	}
+
+	// Return the updated results map
+	return results
 }
 
 func extractHostData(h nmap.Host) ([]string, []string, []string, time.Time, time.Duration) {
@@ -727,7 +895,7 @@ func extractPortData(ports []nmap.Port) ([]Service, []string) {
 	return services, hostnames
 }
 
-func extractHostScriptData(hostScripts []nmap.Script) ([]string, string, []Script) {
+func extractHostScriptData(hostScripts []nmap.Script) ([]Script, []string, string) {
 	var hostnames []string
 	var osSmb = ""
 	scripts := make([]Script, 0, len(hostScripts))
@@ -765,10 +933,10 @@ func extractHostScriptData(hostScripts []nmap.Script) ([]string, string, []Scrip
 	}
 
 	// Return extracted host data
-	return hostnames, osSmb, scripts
+	return scripts, hostnames, osSmb
 }
 
-func extractPortScriptData(ports []nmap.Port) ([]string, []int, []Script) {
+func extractPortScriptData(ports []nmap.Port) ([]Script, []string, []int) {
 	var hostnames []string
 	var sslPorts []int
 	var scripts []Script
@@ -834,7 +1002,7 @@ func extractPortScriptData(ports []nmap.Port) ([]string, []int, []Script) {
 	hostnames = utils.UniqueStrings(hostnames)
 
 	// Return extracted port data
-	return hostnames, sslPorts, scripts
+	return scripts, hostnames, sslPorts
 }
 
 func postprocess(
@@ -1178,7 +1346,7 @@ func hostLookupAd(
 
 			// Query LDAP with explicit authentication (independent of OS)
 			logger.Debugf("Searching LDAP with explicit authentication for '%s'.", host)
-			hData.Ad = active_directory.LdapQuery(
+			hData.Ad = ad.LdapQuery(
 				logger,
 				host,
 				ldapAddress,
@@ -1193,7 +1361,7 @@ func hostLookupAd(
 
 			// Query ADODB with implicit authentication (only working on Windows with suitable domain membership)
 			logger.Debugf("Searching ADODB with implicit authentication for '%s'.", host)
-			hData.Ad = active_directory.AdodbQuery(logger, host, ldapAddress)
+			hData.Ad = ad.AdodbQuery(logger, host, ldapAddress)
 		}
 	}
 }

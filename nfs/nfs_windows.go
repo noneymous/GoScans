@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,15 +12,16 @@ package nfs
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+
 	nfsClient "github.com/krp2/go-nfs-client/nfs"
 	"github.com/siemens/GoScans/filecrawler"
 	"github.com/siemens/GoScans/utils"
 	"github.com/vmware/go-nfs-client/nfs/rpc"
 	"golang.org/x/sys/windows"
-	"os"
-	"os/exec"
-	"strings"
-	"syscall"
 )
 
 const (
@@ -29,9 +30,7 @@ const (
 	nfsFeatureServer = "NFS-Client"                  // Name of the required NFS client feature on Windows servers
 	VerNtWorkstation = 1                             // The product type of Windows clients
 
-	shellToUse  = "cmd"
-	shellArg    = "/C" // For closing cmd after execution
-	adminRights = ""   // We do not need admin rights for the scan on windows
+	adminRights = "" // We do not need admin rights for the scan on Windows
 	unmountArgs = "-f"
 )
 
@@ -39,10 +38,10 @@ const (
 // is required before a scan can be started.
 func setupOs(logger utils.Logger) error {
 
-	// Get version of windows os
+	// Get version of Windows os
 	winVersion := windows.RtlGetVersion()
 	if winVersion == nil {
-		return fmt.Errorf("could not determin version of the operating system")
+		return fmt.Errorf("could not determine version of the operating system")
 	}
 
 	// The Windows Nfs Client needs to be activated to provide the protocol support
@@ -62,16 +61,16 @@ func setupOs(logger utils.Logger) error {
 
 		// Enable Higher feature of Windows Nfs Client
 		logger.Infof("Enabling Windows feature '%s'.", nfsFeatureHigher)
-		cmd := fmt.Sprintf("dism /online /Enable-Feature /FeatureName:%s", nfsFeatureHigher)
-		outHigher, errHigher := exec.Command(shellToUse, shellArg, cmd).CombinedOutput()
+		outHigher, errHigher := exec.Command(
+			"dism", "/online", "/Enable-Feature", "/FeatureName:"+nfsFeatureHigher).CombinedOutput()
 		if errHigher != nil {
 			return fmt.Errorf("could not enable Windows feature '%s': %s ", nfsFeatureHigher, string(outHigher))
 		}
 
 		// Enable Windows Nfs Client
 		logger.Infof("Enabling Windows feature '%s'.", nfsFeature)
-		cmd = fmt.Sprintf("dism /online /Enable-Feature /FeatureName:%s", nfsFeature)
-		outClient, errClient := exec.Command(shellToUse, shellArg, cmd).CombinedOutput()
+		outClient, errClient := exec.Command(
+			"dism", "/online", "/Enable-Feature", "/FeatureName:"+nfsFeature).CombinedOutput()
 		if errClient != nil {
 			return fmt.Errorf("could not enable Windows feature '%s': %s ", nfsFeature, string(outClient))
 		}
@@ -85,20 +84,20 @@ func setupOs(logger utils.Logger) error {
 func checkSetupOs() error {
 
 	// Check the "showmount" command
-	_, err := exec.Command(shellToUse, shellArg, "showmount").CombinedOutput()
-	if err != nil {
+	_, errShowmount := exec.Command("showmount").CombinedOutput()
+	if errShowmount != nil {
 		return fmt.Errorf("could not find Windows command 'showmount'")
 	}
 
 	// Check the mount command
-	_, err = exec.Command(shellToUse, shellArg, "mount").CombinedOutput()
-	if err != nil {
+	_, errMount := exec.Command("mount").CombinedOutput()
+	if errMount != nil {
 		return fmt.Errorf("could not find Windows command 'mount'")
 	}
 
 	// Check the umount command
-	_, err = exec.Command(shellToUse, shellArg, "umount").CombinedOutput()
-	if err != nil {
+	_, errUmount := exec.Command("umount").CombinedOutput()
+	if errUmount != nil {
 		return fmt.Errorf("could not find Windows command 'umount'")
 	}
 
@@ -115,14 +114,24 @@ func (s *Scanner) getExportsV4() (map[string][]string, error) {
 // mountExport mounts an export and returns its mount point
 func (s *Scanner) mountExport(export string, option string) (string, error) {
 
+	// Build mount arguments as discrete values to prevent shell injection via export names
+	var mountArgs []string
+	if option != "" {
+		mountArgs = append(mountArgs, strings.Fields(option)...)
+	}
+	mountArgs = append(mountArgs,
+		"-o", fmt.Sprintf("timeout=%v", s.mountTimeout.Seconds()),
+		fmt.Sprintf("%s:%s", s.target, export),
+		"*",
+	)
+
 	// Mount export and let windows assign the mount point (map network drive)
-	cmd := fmt.Sprintf("mount %s -o timeout=%v %s:%s *", option, s.mountTimeout.Seconds(), s.target, export)
-	out, err := exec.Command(shellToUse, shellArg, cmd).CombinedOutput()
+	out, err := exec.Command("mount", mountArgs...).CombinedOutput()
 
 	// Prepare output message and return if an error occurred
 	outStr := strings.Replace(string(out), "\n", " ", -1)
 	if err != nil {
-		return "", fmt.Errorf(outStr)
+		return "", fmt.Errorf("%s", outStr)
 	}
 
 	// Return an error if we got no drive letter
@@ -135,7 +144,8 @@ func (s *Scanner) mountExport(export string, option string) (string, error) {
 }
 
 // prepareMountBase prepares a base folder for mounting NFS shares, which is only required on Linux
-func prepareMountBase() {
+func prepareMountBase() error {
+	return nil
 }
 
 // deleteMountPoint is not needed on windows

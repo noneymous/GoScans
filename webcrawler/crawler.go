@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2023.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,12 +12,11 @@ package webcrawler
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/siemens/GoScans/utils"
 	"io"
 	"net"
 	"net/http"
@@ -30,6 +29,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/siemens/GoScans/utils"
 )
 
 const (
@@ -131,7 +133,6 @@ type Crawler struct {
 	userAgent      string
 	proxy          *url.URL
 	requestTimeout time.Duration // Maximum seconds to wait for a request response
-	deadline       time.Time     // Time at which the crawler has to abort
 	followTypes    []string
 	downloadTypes  []string
 	targetIp       string           // Used by the crawler to match whether an URL points to the same endpoint
@@ -139,6 +140,7 @@ type Crawler struct {
 	maxThreads     int              // Amount of threads sending requests in parallel
 	known          map[string]uint8 // A hit-map indicated pages that have already been crawled (and how often)
 	nextTaskId     func() int32     // Helper function that returns the next task id
+	context        context.Context  // Context for the crawling, controllable from outside
 }
 
 func NewCrawler(
@@ -160,7 +162,7 @@ func NewCrawler(
 	followTypes []string,
 	downloadTypes []string,
 	maxThreads int,
-	deadline time.Time,
+	context context.Context,
 ) (*Crawler, error) {
 
 	// Validate base URL
@@ -209,7 +211,6 @@ func NewCrawler(
 		userAgent:      userAgent,
 		proxy:          proxy,
 		requestTimeout: requestTimeout,
-		deadline:       deadline,
 		followTypes:    followTypes,
 		downloadTypes:  downloadTypes,
 		targetIp:       ip,
@@ -217,6 +218,7 @@ func NewCrawler(
 		maxThreads:     maxThreads,
 		known:          make(map[string]uint8, 500), // URLs that don't need to be queued, because they were previously found or are to be ignored
 		nextTaskId:     makeCounter(0),
+		context:        context,
 	}, nil
 }
 
@@ -266,15 +268,12 @@ func (c *Crawler) Crawl() *CrawlResult {
 	var chStopQueue = make(chan struct{})        // Channel signaling completion
 	var chStopProcessing = make(chan struct{})   // Channel signaling completion
 
-	// Initialize a deadline timer
-	deadlineTimer := time.After(time.Until(c.deadline))
-
 	// Wait for scan completion or deadline
 	var wgDeadline sync.WaitGroup
+	wgDeadline.Add(1)
 	go func() {
 
 		// Increase workgroup, decrease after completion
-		wgDeadline.Add(1)
 		defer wgDeadline.Done()
 
 		// Write final log message
@@ -282,10 +281,10 @@ func (c *Crawler) Crawl() *CrawlResult {
 
 		// Wait for deadline or completion
 		select {
-		case <-deadlineTimer:
+		case <-c.context.Done():
 			c.logger.Debugf("Sending stop signal, deadline reached.")
 			close(chStopProcessing)
-		case _, _ = <-chStopQueue:
+		case <-chStopQueue:
 			// Continue
 			break
 		}
@@ -293,10 +292,10 @@ func (c *Crawler) Crawl() *CrawlResult {
 
 	// Launch queue management to serialize queue access
 	var wgQueue sync.WaitGroup
+	wgQueue.Add(1)
 	go func() {
 
 		// Increase workgroup, decrease after completion
-		wgQueue.Add(1)
 		defer wgQueue.Done()
 
 		// Write final log message
@@ -336,7 +335,7 @@ func (c *Crawler) Crawl() *CrawlResult {
 				// Log remaining tasks
 				c.logger.Debugf("Remaining queue items: %d", len(queue))
 
-			case _, _ = <-chStopQueue:
+			case <-chStopQueue:
 				return
 			}
 		}
@@ -354,10 +353,10 @@ func (c *Crawler) Crawl() *CrawlResult {
 
 	// Launch processes and receive results
 	var wgProcessing sync.WaitGroup
+	wgProcessing.Add(1)
 	go func() {
 
 		// Increase workgroup, decrease after completion
-		wgProcessing.Add(1)
 		defer wgProcessing.Done()
 
 		// Write final log message
@@ -376,7 +375,7 @@ func (c *Crawler) Crawl() *CrawlResult {
 			processes += 1
 
 			// Delay processing if required
-			timePassed := time.Now().Sub(timeLast)
+			timePassed := time.Since(timeLast)
 			timeDelay := time.Millisecond * time.Duration(delayMilliseconds)
 			timeWait := time.Duration(0)
 			if timePassed < timeDelay {
@@ -453,33 +452,29 @@ func (c *Crawler) Crawl() *CrawlResult {
 
 			// Terminate if shutdown is initiated
 			select {
-			case _, _ = <-chStopProcessing:
+			case <-chStopProcessing:
 				if processes == 0 {
 					close(chStopQueue)
 					return
 				}
-				select {
-				case r := <-chTaskResult:
-					processTaskResult(r)
-					continue
-				}
+				r := <-chTaskResult
+				processTaskResult(r)
+				continue
 			default:
 			}
 
 			// Terminate loop if shutdown is initiated
 			if processes < c.maxThreads { // Launch if slot available
 				select {
-				case _ = <-chQueueSignal:
+				case <-chQueueSignal:
 					t := <-chQueueRead
 					processTask(t)
 				case r := <-chTaskResult:
 					processTaskResult(r)
 				}
 			} else { // Wait for result to free slot
-				select {
-				case r := <-chTaskResult:
-					processTaskResult(r)
-				}
+				r := <-chTaskResult
+				processTaskResult(r)
 			}
 		}
 	}()
@@ -490,7 +485,7 @@ func (c *Crawler) Crawl() *CrawlResult {
 	wgDeadline.Wait()
 
 	// Check whether the scan was ended due to the scan timeout
-	if utils.DeadlineReached(c.deadline) {
+	if utils.ContextExpired(c.context) {
 		result.Status = utils.StatusDeadline
 		c.logger.Debugf("Crawler finished with timeout.")
 	} else {
@@ -787,7 +782,7 @@ func (c *Crawler) processResult(r *taskResult, result *CrawlResult, chQueueSend 
 		result.Pages = append(result.Pages, r.result)
 
 		// Aggregate authentication detection into result data
-		if result.AuthSuccess == false && r.result.AuthSuccess == true {
+		if !result.AuthSuccess && r.result.AuthSuccess {
 			result.AuthSuccess = true
 			result.AuthMethod = r.result.AuthMethod
 		} else if result.AuthMethod == "" {
@@ -1040,7 +1035,7 @@ func streamToFile(logger utils.Logger, source io.Reader, outputFolder string, ou
 
 	// Create tmp folder if it does not exist
 	if _, err := os.Stat(outputFolder); errors.Is(err, os.ErrNotExist) {
-		errMk := os.Mkdir(outputFolder, os.ModePerm)
+		errMk := os.Mkdir(outputFolder, 0700)
 		if errMk != nil {
 			logger.Warningf("Could not create download folder: %s", errMk)
 		}

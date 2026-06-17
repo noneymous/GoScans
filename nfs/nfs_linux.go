@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -15,29 +15,31 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/siemens/GoScans/filecrawler"
-	"github.com/siemens/GoScans/utils"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/siemens/GoScans/filecrawler"
+	"github.com/siemens/GoScans/utils"
 )
 
 const (
 	nfsLibrary  = "nfs-common"
-	mountDir    = "/nfs"
 	sudoersDir  = "/etc/sudoers.d"
 	sudoersFile = "nfs-sudoers"
+	mountBase   = "./nfs"
 
-	// Create the sudoers config file and use visudo to safely make an entry for the needed commands
+	// Create the sudoers config file and use visudo to safely make an entry for the needed commands.
+	// Only used with constant inputs during setup, not with scan-time user data.
 	createSudoersConfig = "echo \"[USERNAME] ALL=NOPASSWD: /usr/bin/mount, /usr/bin/umount, /usr/sbin/showmount \" | " +
 		"EDITOR=\"tee\" visudo -f /etc/sudoers.d/" + sudoersFile
 
-	shellToUse  = "sh" // Choose the systems shell
-	shellArg    = "-c" // Read commands from the command_string operand instead of the standard input
-	adminRights = "sudo"
+	shellToUse  = "sh"   // Choose the system's shell. Only used by setup and interactive helpers.
+	shellArg    = "-c"   // Read commands from the command_string operand instead of the standard input
+	adminRights = "sudo" // Prepended to scan commands via execCmd (without shell interpretation)
 	unmountArgs = "-f -l"
 )
 
@@ -91,14 +93,14 @@ func checkSetupOs() error {
 	// Run all commands consecutively and check if and what kind of errors occurred
 	for _, cmdStr := range cmdStrs {
 
-		// We use 3 times empty input since we could be ask for sudo password 3 times if sudoers configuration failed
+		// We use 3 times empty input since we could be asked for sudo password 3 times if sudoers configuration failed
 		_, errExec := execWithUserInput(cmdStr, []string{"", "", ""})
 
 		// Return specific error if possible, generic otherwise
 		if errExec != nil && strings.Contains(errExec.Error(), "command not found") {
 			return fmt.Errorf("package '%s' not found", nfsLibrary)
 		}
-		if errExec != nil && strings.Contains(errExec.Error(), "3 incorrect password attempts") {
+		if errExec != nil && strings.Contains(errExec.Error(), "incorrect password") {
 			return fmt.Errorf("invalid sudoers configuration for '%s'", nfsLibrary)
 		}
 		if errExec != nil {
@@ -166,7 +168,7 @@ func (s *Scanner) mountExport(export string, option string) (string, error) {
 	// Prepare a valid and distinguishable mount point folder name
 	mountPoint := fmt.Sprintf(
 		"%s/scan_%s_%s_%s",
-		mountDir,
+		mountBase,
 		s.target,
 		strings.ReplaceAll(export, "/", "-"),
 		time.Now().Format("2006-01-02-15:04:05.000"),
@@ -178,19 +180,19 @@ func (s *Scanner) mountExport(export string, option string) (string, error) {
 		return "", errMntPnt
 	}
 
-	// Prepare mount command
-	cmdStr := fmt.Sprintf(
-		"%s mount %s -o soft,retry=0,timeo=%v %s:%s %s",
-		adminRights,
-		option,
-		s.mountTimeout.Seconds()*10,
-		s.target,
-		export,
+	// Build mount arguments as discrete values to prevent shell injection via export names
+	var mountArgs []string
+	if option != "" {
+		mountArgs = append(mountArgs, strings.Fields(option)...)
+	}
+	mountArgs = append(mountArgs,
+		"-o", fmt.Sprintf("soft,retry=0,timeo=%v", s.mountTimeout.Seconds()*10),
+		fmt.Sprintf("%s:%s", s.target, export),
 		mountPoint,
 	)
 
-	// Execute mount
-	out, errMnt := exec.Command(shellToUse, shellArg, cmdStr).CombinedOutput()
+	// Execute mount without shell interpretation
+	out, errMnt := execCmd("mount", mountArgs...).CombinedOutput()
 	if errMnt != nil {
 
 		// Delete the created mount point, if it couldn't be used for mounting
@@ -203,7 +205,7 @@ func (s *Scanner) mountExport(export string, option string) (string, error) {
 		outStr := strings.Replace(string(out), "\n", " ", -1)
 
 		// Return error
-		return "", fmt.Errorf(outStr)
+		return "", fmt.Errorf("%s", outStr)
 	}
 
 	// Return mount point
@@ -213,34 +215,41 @@ func (s *Scanner) mountExport(export string, option string) (string, error) {
 // prepareMountBase prepares a base folder for mounting NFS shares, which is only required on Linux
 func prepareMountBase() error {
 
-	// Check whether path is existing and a not a directory
-	info, errStat := os.Stat(mountDir)
-	existing := !os.IsNotExist(errStat)
-
-	// Check validity or try to create file
-	if existing {
-		if !info.IsDir() { // File path is existing but a folder
-			return fmt.Errorf("mount base '%s' already exists", mountDir)
+	// Ensure directory exists
+	info, err := os.Stat(mountBase)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if errMkdir := os.MkdirAll(mountBase, 0700); errMkdir != nil {
+				return fmt.Errorf("could not prepare mount base '%s': %w", mountBase, errMkdir)
+			}
+		} else {
+			return fmt.Errorf("could not prepare mount base '%s': %w", mountBase, err)
 		}
 	} else {
-		errMountBase := os.MkdirAll(mountDir, 0660)
-		if errMountBase != nil {
-			return fmt.Errorf("could not craete mount base '%s': %s", mountDir, errMountBase)
+		if !info.IsDir() { // Exists but is not a directory
+			return fmt.Errorf("could not use mount base '%s' as directory", mountBase)
 		}
 	}
 
-	// Return nil as everything went fine
+	// Check usability (write, create, delete)
+	testFile, errTestFile := os.CreateTemp(mountBase, ".perm_check_*")
+	if errTestFile != nil {
+		return fmt.Errorf("could not access mount base '%s'", mountBase)
+	}
+	_ = testFile.Close()
+	_ = os.Remove(testFile.Name())
+
+	// Return nil if everything went fine
 	return nil
 }
 
 // deleteMountPoint removes unused mount points
 func deleteMountPoint(mountPoint string) error {
 
-	// remove empty mounting point folder
-	cmdStr := fmt.Sprintf("rmdir %s", mountPoint)
-	out, err := exec.Command(shellToUse, shellArg, cmdStr).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf(string(out))
+	// Remove empty mount point directory directly, without shell interpretation
+	errRemove := os.Remove(mountPoint)
+	if errRemove != nil {
+		return errRemove
 	}
 
 	// Return nil as everything went fine
@@ -384,5 +393,4 @@ func execWithUserInput(cmdStr string, userInput []string) (string, error) {
 // getUnixFlagsWindows extracts unix file permissions of a file. On Linux systems, this can already be done directly
 // by the file crawler. On Windows this needs to be done additionally.
 func (s *Scanner) getUnixFlagsWindows(exportName string, exportResults *filecrawler.Result) {
-	return
 }

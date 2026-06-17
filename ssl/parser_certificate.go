@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,15 +11,16 @@
 package ssl
 
 import (
-	"crypto/dsa"
+	"crypto/dsa" //lint:ignore SA1019 needed to parse legacy DSA certificates found in scan output
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"reflect"
+
 	"github.com/noneymous/GoSslyze"
 	"github.com/siemens/GoScans/utils"
-	"reflect"
 )
 
 // SSLyze can return multiple certificate chains (deployments). This happens if the server returns different leaf
@@ -56,7 +57,7 @@ func parseCertificateChains(
 			anyInvalidOrder = true
 		}
 
-		// Check whether any trust store was able to validate this deployment, if so save it's name.
+		// Check whether any trust store was able to validate this deployment, if so save its name.
 		valid := false
 		for _, validation := range deployment.PathValidation {
 			if validation.VerifiedChain != nil && len(*validation.VerifiedChain) > 0 {

@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2021.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,13 +12,14 @@ package discovery
 
 import (
 	"fmt"
-	"github.com/siemens/GoScans/utils"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/siemens/GoScans/utils"
 )
 
-// Windows implementation of discovery scan setup
+// Linux implementation of discovery scan setup
 func setupOs(logger utils.Logger, nmapDir string, nmap string) error {
 
 	// Check for Admin rights
@@ -34,14 +35,26 @@ func setupOs(logger utils.Logger, nmapDir string, nmap string) error {
 		nmap,
 	).Output()
 	if errCapabilities != nil {
-		return fmt.Errorf("could not set root capabilities for nmap: %s", errCapabilities)
+		return fmt.Errorf("could not set root capabilities for Nmap: %s", errCapabilities)
+	}
+
+	// Set cap_net_raw on the agent binary for OT discovery protocols (PROFINET DCP, EtherCAT, LLDP)
+	// that require raw sockets without running the entire agent as root.
+	logger.Infof("Setting raw socket capabilities on agent for OT discovery.")
+	agentBin, errBin := os.Executable()
+	if errBin != nil {
+		return fmt.Errorf("could not determine agent path: %s", errBin)
+	}
+	_, errAgentCap := exec.Command("setcap", "cap_net_raw+ep", agentBin).Output()
+	if errAgentCap != nil {
+		return fmt.Errorf("could not set raw socket capabilities for agent: %s", errAgentCap)
 	}
 
 	// Return nil as everything went fine
 	return nil
 }
 
-// Windows implementation of discovery scan setup check
+// Linux implementation of discovery scan setup check
 func checkSetupOs(nmapDir string, nmap string) error {
 
 	// Verify whether root capabilities are set for nmap executable
@@ -52,9 +65,21 @@ func checkSetupOs(nmapDir string, nmap string) error {
 		nmap,
 	).Output()
 	if errCapabilities != nil {
-		return fmt.Errorf("could not check root capabilities for nmap: %s", errCapabilities)
+		return fmt.Errorf("could not check root capabilities for Nmap: %s", errCapabilities)
 	} else if !strings.Contains(strings.Trim(string(result), "\n"), ": OK") {
-		return fmt.Errorf("root capabilities are not set for nmap: %s", result)
+		return fmt.Errorf("root capabilities are not set for Nmap: %s", result)
+	}
+
+	// Verify whether raw socket capabilities are set for the agent binary (required for OT discovery)
+	agentBin, errBin := os.Executable()
+	if errBin != nil {
+		return fmt.Errorf("could not determine agent binary path: %s", errBin)
+	}
+	resultAgent, errAgentCap := exec.Command("setcap", "-v", "cap_net_raw+ep", agentBin).Output()
+	if errAgentCap != nil {
+		return fmt.Errorf("could not check raw socket capabilities for agent: %s", errAgentCap)
+	} else if !strings.Contains(strings.Trim(string(resultAgent), "\n"), ": OK") {
+		return fmt.Errorf("raw socket capabilities are not set for agent: %s", resultAgent)
 	}
 
 	// Set ENV variable to instruct Nmap to make use of root capabilities

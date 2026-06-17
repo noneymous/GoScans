@@ -1,21 +1,24 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package smb implements a scan module for discovering and crawling SMB shares.
 package smb
 
 import (
+	"context"
 	"fmt"
-	"github.com/siemens/GoScans/filecrawler"
-	"github.com/siemens/GoScans/utils"
 	"strings"
 	"time"
+
+	"github.com/siemens/GoScans/filecrawler"
+	"github.com/siemens/GoScans/utils"
 )
 
 const Label = "Smb"
@@ -49,11 +52,13 @@ type Scanner struct {
 	excludedExtensions        map[string]struct{}
 	excludedLastModifiedBelow time.Time
 	excludedFileSizeBelow     int
-	onlyAccessibleFiles       bool      // If true then the scanner only returns files which are readable or writeable
-	smbDomain                 string    // (Optional) credentials for SMB connection
-	smbUser                   string    // ...
-	smbPassword               string    // ...
-	deadline                  time.Time // Time when the scanner has to abort
+	onlyAccessibleFiles       bool   // If true then the scanner only returns files which are readable or writeable
+	smbDomain                 string // (Optional) credentials for SMB connection
+	smbUser                   string // ...
+	smbPassword               string // ...
+
+	contextInner       context.Context    // Context for the scan, within which the scan should execute. Might optionally wrap an outer context. If outer context is cancelled, inner one should cancel too, but not the other way around.
+	contextInnerCancel context.CancelFunc // Context cancel function of inner context, not impacting optional outer one.
 }
 
 func NewScanner(
@@ -72,6 +77,9 @@ func NewScanner(
 	smbUser string,
 	smbPassword string,
 ) (*Scanner, error) {
+
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
 
 	// Check whether input target is valid
 	if !utils.IsValidAddress(target) {
@@ -99,7 +107,7 @@ func NewScanner(
 		time.Time{}, // zero time
 		time.Time{}, // zero time
 		logger,
-		strings.TrimSpace(target),
+		target,
 		crawlDepth,
 		threads,
 		forcedShares,
@@ -112,11 +120,21 @@ func NewScanner(
 		smbDomain,
 		smbUser,
 		smbPassword,
-		time.Time{}, // zero time (no deadline yet set)
+		nil,
+		nil,
 	}
 
 	// Return scan struct
 	return &scan, nil
+}
+
+// SetContext can be used to pass an existing context from outside.
+// If timeout is supplied later when calling Run() the external context and the deadline context will be combined.
+// Once set, the context cannot be changed anymore, because it might have been wrapped internally already.
+func (s *Scanner) SetContext(ctx context.Context) {
+	if s.contextInner == nil {
+		s.contextInner = ctx
+	}
 }
 
 // Run starts scan execution. This must either be executed as a goroutine, or another thread must be active listening
@@ -147,14 +165,29 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 		}
 	}()
 
-	// Set scan started flag and calculate deadline
+	// Set scan started flag
 	s.Started = time.Now()
-	if timeout > 0 {
-		s.deadline = time.Now().Add(timeout)
+
+	// Create initial context
+	contextInner := context.Background()
+
+	// Replace context with external one if set
+	if s.contextInner != nil {
+		contextInner = s.contextInner
 	}
-	s.logger.Infof("Started  scan of %s.", s.target)
+
+	// Add timeout to context if desired
+	var contextInnerCancel context.CancelFunc
+	if timeout > 0 {
+		contextInner, contextInnerCancel = context.WithTimeout(contextInner, timeout)
+	}
+
+	// Set context for scan
+	s.contextInner = contextInner
+	s.contextInnerCancel = contextInnerCancel
 
 	// Execute scan logic
+	s.logger.Infof("Started  scan of %s.", s.target)
 	res = s.execute()
 
 	// Log scan completion message
@@ -167,6 +200,11 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 }
 
 func (s *Scanner) execute() *Result {
+
+	// Cleanup inner context if set
+	if s.contextInnerCancel != nil {
+		defer s.contextInnerCancel()
+	}
 
 	// Log start
 	s.logger.Debugf("Crawling '%s'.", s.target)
@@ -183,7 +221,7 @@ func (s *Scanner) execute() *Result {
 	)
 
 	// Check whether scan timeout is reached (Timeout status already set)
-	if utils.DeadlineReached(s.deadline) {
+	if utils.ContextExpired(s.contextInner) {
 		s.logger.Debugf("Scan ran into timeout.")
 		return &Result{
 			filecrawler.Result{

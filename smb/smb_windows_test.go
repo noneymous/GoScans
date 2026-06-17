@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,13 +11,15 @@
 package smb
 
 import (
-	"github.com/siemens/GoScans/filecrawler"
-	"github.com/siemens/GoScans/utils"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/siemens/GoScans/filecrawler"
+	"github.com/siemens/GoScans/utils"
 )
 
+// TestScanner_mountAndUnmount verifies that mountShare and unmountShare return errors for unreachable hosts.
 func TestScanner_mountAndUnmount(t *testing.T) {
 	type args struct {
 		share shareInfo
@@ -28,8 +30,9 @@ func TestScanner_mountAndUnmount(t *testing.T) {
 		wantErrConn bool
 		wantErrCanc bool
 	}{
-		{"no-such-host",
-			args{
+		{
+			name: "no-such-host",
+			args: args{
 				share: shareInfo{
 					Name:   "qayxswedcvfrtgbnhzujm",
 					Target: "qayxswedcvfrtgbnhzujm",
@@ -37,8 +40,8 @@ func TestScanner_mountAndUnmount(t *testing.T) {
 					IsDfs:  false,
 				},
 			},
-			true,
-			true,
+			wantErrConn: true,
+			wantErrCanc: true,
 		},
 	}
 	for _, tt := range tests {
@@ -47,15 +50,16 @@ func TestScanner_mountAndUnmount(t *testing.T) {
 				logger: utils.NewTestLogger(),
 			}
 			if err := s.mountShare(tt.args.share); (err != nil) != tt.wantErrConn {
-				t.Errorf("mountShare() error = %v, wantErr %v", err, tt.wantErrConn)
+				t.Errorf("mountShare() error = '%v', wantErr = '%v'", err, tt.wantErrConn)
 			}
 			if err := s.unmountShare(tt.args.share); (err != nil) != tt.wantErrCanc {
-				t.Errorf("unmountShare() error = %v, wantErr %v", err, tt.wantErrCanc)
+				t.Errorf("unmountShare() error = '%v', wantErr = '%v'", err, tt.wantErrCanc)
 			}
 		})
 	}
 }
 
+// TestScanner_getShares verifies that getShares returns an error when the target host is not reachable.
 func TestScanner_getShares(t *testing.T) {
 	type fields struct {
 		target string
@@ -67,10 +71,10 @@ func TestScanner_getShares(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			"not reachable",
-			fields{target: "test.sub.domain.tld"},
-			nil,
-			true,
+			name:    "not-reachable",
+			fields:  fields{target: "test.sub.domain.tld"},
+			want:    nil,
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -81,16 +85,17 @@ func TestScanner_getShares(t *testing.T) {
 			}
 			got, err := s.getShares()
 			if (err != nil) != tt.wantErr {
-				t.Errorf("getShares() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("getShares() error = '%v', wantErr = '%v'", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("getShares() got = %v, \n want %v", got, tt.want)
+				t.Errorf("getShares() = '%v', want = '%v'", got, tt.want)
 			}
 		})
 	}
 }
 
+// TestScanner_crawl verifies that crawl returns the expected status and empty results when the SMB host is not reachable.
 func TestScanner_crawl(t *testing.T) {
 	type fields struct {
 		target                    string
@@ -105,7 +110,6 @@ func TestScanner_crawl(t *testing.T) {
 		smbDomain                 string
 		smbUser                   string
 		smbPassword               string
-		deadline                  time.Time
 	}
 	tests := []struct {
 		name           string
@@ -114,7 +118,7 @@ func TestScanner_crawl(t *testing.T) {
 		wantFilesTotal int
 	}{
 		{
-			name: "host not reachable",
+			name: "host-not-reachable",
 			fields: fields{
 				target:   "qayxswedcvfrtgbnhzujm",
 				maxDepth: -1,
@@ -142,26 +146,25 @@ func TestScanner_crawl(t *testing.T) {
 				smbUser:                   tt.fields.smbUser,
 				smbPassword:               tt.fields.smbPassword,
 				threads:                   tt.fields.threads,
-				deadline:                  tt.fields.deadline,
 			}
 			got := s.crawl()
 			if !reflect.DeepEqual(got.FoldersReadable, tt.want.FoldersReadable) {
-				t.Errorf("Crawl() = %v, want %v (FoldersReadable)", got.FoldersReadable, tt.want.FoldersReadable)
+				t.Errorf("crawl() FoldersReadable = '%v', want = '%v'", got.FoldersReadable, tt.want.FoldersReadable)
 			}
 			if !reflect.DeepEqual(got.FilesReadable, tt.want.FilesReadable) {
-				t.Errorf("Crawl() = %v, want %v (FilesReadable)", got.FilesReadable, tt.want.FilesReadable)
+				t.Errorf("crawl() FilesReadable = '%v', want = '%v'", got.FilesReadable, tt.want.FilesReadable)
 			}
 			if !reflect.DeepEqual(got.FilesWritable, tt.want.FilesWritable) {
-				t.Errorf("Crawl() = %v, want %v (FilesWritable)", got.FilesWritable, tt.want.FilesWritable)
+				t.Errorf("crawl() FilesWritable = '%v', want = '%v'", got.FilesWritable, tt.want.FilesWritable)
 			}
 			if !reflect.DeepEqual(got.Status, tt.want.Status) {
-				t.Errorf("Crawl() = %v, want %v (Status)", got.Status, tt.want.Status)
+				t.Errorf("crawl() Status = '%v', want = '%v'", got.Status, tt.want.Status)
 			}
 			if !reflect.DeepEqual(got.Exception, tt.want.Exception) {
-				t.Errorf("Crawl() = %v, want %v (Exception)", got.Exception, tt.want.Exception)
+				t.Errorf("crawl() Exception = '%v', want = '%v'", got.Exception, tt.want.Exception)
 			}
 			if !reflect.DeepEqual(len(got.Data), tt.wantFilesTotal) {
-				t.Errorf("Crawl() = %v, want %v (FilesTotal)", len(got.Data), tt.wantFilesTotal)
+				t.Errorf("crawl() FilesTotal = '%v', want = '%v'", len(got.Data), tt.wantFilesTotal)
 			}
 		})
 	}

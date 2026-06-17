@@ -1,24 +1,26 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package ssl implements a scan module for SSL/TLS endpoint analysis and cipher suite enumeration.
 package ssl
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/noneymous/GoSslyze"
-	"github.com/siemens/GoScans/utils"
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/noneymous/GoSslyze"
+	"github.com/siemens/GoScans/utils"
 )
 
 const Label = "Ssl"
@@ -251,8 +253,10 @@ type Scanner struct {
 	target         string                       // Target address to be scanned (might be IPv4, IPv6 or hostname)
 	port           int                          //
 	vhosts         []string                     // Alternative server names
-	deadline       time.Time                    // Time when the scanner has to abort
 	sslyzeScanners map[string]*gosslyze.Scanner // Sslyze scanner objects to be executed
+
+	contextInner       context.Context    // Context for the scan, within which the scan should execute. Might optionally wrap an outer context. If outer context is cancelled, inner one should cancel too, but not the other way around.
+	contextInnerCancel context.CancelFunc // Context cancel function of inner context, not impacting optional outer one.
 }
 
 func newScanner( // Private, because the public factories are in the os specific files
@@ -265,6 +269,9 @@ func newScanner( // Private, because the public factories are in the os specific
 	port int,
 	vhosts []string,
 ) (*Scanner, error) {
+
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
 
 	// Check whether input target is valid
 	if !utils.IsValidAddress(target) {
@@ -292,11 +299,12 @@ func newScanner( // Private, because the public factories are in the os specific
 		time.Time{}, // zero time
 		time.Time{}, // zero time
 		logger,
-		strings.TrimSpace(target),
+		target,
 		port,
 		vhosts,
-		time.Time{}, // zero time (no deadline yet set)
 		make(map[string]*gosslyze.Scanner),
+		nil,
+		nil,
 	}
 
 	// Prepare SSLyze main scan with original target as SNI
@@ -337,6 +345,15 @@ func newScanner( // Private, because the public factories are in the os specific
 	return &scan, nil
 }
 
+// SetContext can be used to pass an existing context from outside.
+// If timeout is supplied later when calling Run() the external context and the deadline context will be combined.
+// Once set, the context cannot be changed anymore, because it might have been wrapped internally already.
+func (s *Scanner) SetContext(ctx context.Context) {
+	if s.contextInner == nil {
+		s.contextInner = ctx
+	}
+}
+
 // Run starts scan execution. This must either be executed as a goroutine, or another thread must be active listening
 // on the scan's result channel, in order to avoid a deadlock situation.
 func (s *Scanner) Run(timeout time.Duration) (res *Result) {
@@ -360,14 +377,29 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 		}
 	}()
 
-	// Set scan started flag and calculate deadline
+	// Set scan started flag
 	s.Started = time.Now()
-	if timeout > 0 {
-		s.deadline = time.Now().Add(timeout)
+
+	// Create initial context
+	contextInner := context.Background()
+
+	// Replace context with external one if set
+	if s.contextInner != nil {
+		contextInner = s.contextInner
 	}
-	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
+
+	// Add timeout to context if desired
+	var contextInnerCancel context.CancelFunc
+	if timeout > 0 {
+		contextInner, contextInnerCancel = context.WithTimeout(contextInner, timeout)
+	}
+
+	// Set context for scan
+	s.contextInner = contextInner
+	s.contextInnerCancel = contextInnerCancel
 
 	// Execute scan logic
+	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
 	res = s.execute()
 
 	// Log scan completion message
@@ -381,6 +413,11 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 
 func (s *Scanner) execute() *Result {
 
+	// Cleanup inner context if set
+	if s.contextInnerCancel != nil {
+		defer s.contextInnerCancel()
+	}
+
 	// Declare variables
 	result := Result{
 		make([]*Data, 0, len(s.sslyzeScanners)),
@@ -393,7 +430,7 @@ func (s *Scanner) execute() *Result {
 
 		// Calculate the remaining time for the whole SSL scan. This timeout will not stop the parsing of an SSLyze
 		// result, but will stop a running SSLyze instance.
-		if utils.DeadlineReached(s.deadline) {
+		if utils.ContextExpired(s.contextInner) {
 			s.logger.Debugf("Scan ran into timeout.")
 
 			// Get the list of outstanding targets
@@ -413,23 +450,17 @@ func (s *Scanner) execute() *Result {
 			break
 		}
 
-		// Create timeout context
-		ctx, cancel := context.WithDeadline(context.Background(), s.deadline)
-
 		// Apply timeout context to scanner.
 		// In this case we actually could issue the timeout context during scanner initialization, because we don't call
 		// the cancel func using a defer statement. But it could be broken by coming changes to the code structure and
 		// we'd have to save the CancelFunc for every nmap scanner.
-		sslyzeScanner.WithContext(ctx)
+		sslyzeScanner.WithContext(s.contextInner)
 
 		// Execute SSLyze scan
 		scanResult, errSslyze := sslyzeScanner.Run()
 
 		// Check for errors
 		if errSslyze != nil {
-
-			// Release the resources associated with the context, if the timeout was not reached yet.
-			cancel()
 
 			// Check if the scan timed out
 			if errors.Is(errSslyze, gosslyze.ErrContextExpired) {
@@ -445,9 +476,6 @@ func (s *Scanner) execute() *Result {
 			result.Exception = true
 			break
 		}
-
-		// Release the resources associated with the context, if the timeout was not reached yet.
-		cancel()
 
 		// Parse the (raw) SSLyze scan result into our structs.
 		parsedData := parseSslyzeResult(s.logger, target, scanResult)

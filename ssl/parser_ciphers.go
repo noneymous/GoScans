@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -13,9 +13,10 @@ package ssl
 import (
 	"encoding/base64"
 	"fmt"
+	"reflect"
+
 	"github.com/noneymous/GoSslyze"
 	"github.com/siemens/GoScans/utils"
-	"reflect"
 )
 
 // parseCiphers evaluates the accepted ciphers and returns the information about those ciphers as well as the cipher
@@ -222,24 +223,21 @@ func parseEphemeralKeyInfo(logger utils.Logger, info gosslyze.EphemeralKeyInfo) 
 
 	var kex KeyExchange
 
-	switch info.(type) {
+	switch i := info.(type) {
 	case *gosslyze.BaseKeyInfo:
 		// We shouldn't get a plain BaseKeyInfo, but it's possible
-		i := info.(*gosslyze.BaseKeyInfo)
 		parseBase(i)
 
 		// We can not calculate the key strength, because we don't know which method is used
 		return size, 0, extras
 
 	case *gosslyze.EcdhKeyInfo:
-		i := info.(*gosslyze.EcdhKeyInfo)
 		parseBase(&i.BaseKeyInfo)
 		extras = append(extras, "CurveName: "+i.CurveName)
 
 		kex = KEX_ECDHE
 
 	case *gosslyze.NistEcdhKeyInfo:
-		i := info.(*gosslyze.NistEcdhKeyInfo)
 		parseBase(&i.BaseKeyInfo)
 		extras = append(extras, "CurveName: "+i.CurveName)
 		extras = append(extras, "X: "+base64.StdEncoding.EncodeToString(i.X))
@@ -248,7 +246,6 @@ func parseEphemeralKeyInfo(logger utils.Logger, info gosslyze.EphemeralKeyInfo) 
 		kex = KEX_ECDHE
 
 	case *gosslyze.DhKeyInfo:
-		i := info.(*gosslyze.DhKeyInfo)
 		parseBase(&i.BaseKeyInfo)
 
 		extras = append(extras, "Prime: "+base64.StdEncoding.EncodeToString(i.Prime))

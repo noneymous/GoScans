@@ -1,23 +1,37 @@
+/*
+* GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
+*
+* Copyright (c) Siemens AG, 2016-2026.
+*
+* This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
+* directory or visit <https://opensource.org/licenses/MIT>.
+*
+ */
+
 package filecrawler
 
 import (
-	"github.com/davecgh/go-spew/spew"
-	"github.com/siemens/GoScans/_test"
-	"github.com/siemens/GoScans/utils"
+	"context"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/davecgh/go-spew/spew"
+	"github.com/siemens/GoScans/_test"
+	"github.com/siemens/GoScans/utils"
 )
 
+// TestCrawler_Crawl verifies that the crawler correctly traverses directories and returns expected file and folder results.
 func TestCrawler_Crawl(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
+
+	// Prepare exceeded context
+	ctxExceeded, ctxExceededCancel := context.WithTimeout(context.Background(), -3*time.Second)
+	defer ctxExceededCancel()
 
 	// Prepare test variables
 	crawlFolder := filepath.Join(testSettings.PathDataDir, "filecrawler")
@@ -31,7 +45,7 @@ func TestCrawler_Crawl(t *testing.T) {
 		excludedFileSizeBelow     int64
 		onlyAccessibleFiles       bool
 		threads                   int
-		deadline                  time.Time
+		context                   context.Context
 	}
 	type args struct {
 		startInfo *EntryPoint
@@ -57,7 +71,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       false,
 				threads:                   1,
-				deadline:                  time.Time{},
+				context:                   context.Background(),
 			},
 			args: args{startInfo: &EntryPoint{
 				Path:      crawlFolder,
@@ -89,7 +103,7 @@ func TestCrawler_Crawl(t *testing.T) {
 					Path:       filepath.Join(crawlFolder, "empty.txt"),
 					Name:       "empty.txt",
 					Extension:  "txt",
-					Mime:       "text/plain; charset=utf-8",
+					Mime:       "text/plain",
 					Readable:   true,
 					Writable:   true,
 					Flags:      "-rwxrwx---",
@@ -103,7 +117,7 @@ func TestCrawler_Crawl(t *testing.T) {
 					Path:       filepath.Join(crawlFolder, "file1.txt"),
 					Name:       "file1.txt",
 					Extension:  "txt",
-					Mime:       "text/plain; charset=utf-8",
+					Mime:       "text/plain",
 					Readable:   true,
 					Writable:   true,
 					Flags:      "-rwxrwx---",
@@ -145,7 +159,7 @@ func TestCrawler_Crawl(t *testing.T) {
 			wantException: false,
 		},
 		{
-			name: "excluded folders",
+			name: "excluded-folders",
 			fields: fields{
 				crawlDepth:                -1,
 				excludedFolders:           map[string]struct{}{"filecrawler": {}},
@@ -154,7 +168,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       false,
 				threads:                   0,
-				deadline:                  time.Time{},
+				context:                   context.Background(),
 			},
 			args: args{startInfo: &EntryPoint{
 				Path:      crawlFolder,
@@ -171,7 +185,7 @@ func TestCrawler_Crawl(t *testing.T) {
 			wantException:       false,
 		},
 		{
-			name: "excluded extensions",
+			name: "excluded-extensions",
 			fields: fields{
 				crawlDepth:                -1,
 				excludedFolders:           nil,
@@ -180,7 +194,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       false,
 				threads:                   0,
-				deadline:                  time.Time{},
+				context:                   context.Background(),
 			},
 			args: args{startInfo: &EntryPoint{
 				Path:      crawlFolder,
@@ -211,7 +225,7 @@ func TestCrawler_Crawl(t *testing.T) {
 			wantException: false,
 		},
 		{
-			name: "excluded last modified",
+			name: "excluded-last-modified",
 			fields: fields{
 				crawlDepth:                -1,
 				excludedFolders:           nil,
@@ -220,7 +234,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       false,
 				threads:                   0,
-				deadline:                  time.Time{},
+				context:                   context.Background(),
 			},
 			args: args{startInfo: &EntryPoint{
 				Path:      crawlFolder,
@@ -237,7 +251,7 @@ func TestCrawler_Crawl(t *testing.T) {
 			wantException:       false,
 		},
 		{
-			name: "excluded filesize",
+			name: "excluded-filesize",
 			fields: fields{
 				crawlDepth:                -1,
 				excludedFolders:           nil,
@@ -246,7 +260,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     10,
 				onlyAccessibleFiles:       false,
 				threads:                   0,
-				deadline:                  time.Time{},
+				context:                   context.Background(),
 			},
 			args: args{startInfo: &EntryPoint{
 				Path:      crawlFolder,
@@ -286,7 +300,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       false,
 				threads:                   0,
-				deadline:                  time.Now(),
+				context:                   ctxExceeded,
 			},
 			args: args{startInfo: &EntryPoint{
 				Path:      crawlFolder,
@@ -303,7 +317,7 @@ func TestCrawler_Crawl(t *testing.T) {
 			wantException:       false,
 		},
 		{
-			name: "nil argument",
+			name: "nil-argument",
 			fields: fields{
 				crawlDepth:                -1,
 				excludedFolders:           nil,
@@ -312,7 +326,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       false,
 				threads:                   0,
-				deadline:                  time.Time{},
+				context:                   context.Background(),
 			},
 			args: args{
 				startInfo: nil,
@@ -325,7 +339,7 @@ func TestCrawler_Crawl(t *testing.T) {
 			wantException:       false,
 		},
 		{
-			name: "empty argument",
+			name: "empty-argument",
 			fields: fields{
 				crawlDepth:                -1,
 				excludedFolders:           nil,
@@ -334,7 +348,7 @@ func TestCrawler_Crawl(t *testing.T) {
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       false,
 				threads:                   0,
-				deadline:                  time.Time{},
+				context:                   context.Background(),
 			},
 			args: args{
 				startInfo: &EntryPoint{},
@@ -346,13 +360,38 @@ func TestCrawler_Crawl(t *testing.T) {
 			wantStatus:          utils.StatusCompleted,
 			wantException:       false,
 		},
+		{
+			name: "nonexistent-path",
+			fields: fields{
+				crawlDepth:                -1,
+				excludedFolders:           nil,
+				excludedExtensions:        nil,
+				excludedLastModifiedBelow: time.Time{},
+				excludedFileSizeBelow:     0,
+				onlyAccessibleFiles:       false,
+				threads:                   0,
+				context:                   context.Background(),
+			},
+			args: args{startInfo: &EntryPoint{
+				Path:      "/does/not/exist/folder",
+				InsideDfs: false,
+				Share:     "nonexistent",
+				IsShare:   false,
+			}},
+			wantFoldersReadable: 0,
+			wantFilesReadable:   0,
+			wantFilesWritable:   0,
+			wantFileInfos:       nil,
+			wantStatus:          utils.StatusCompleted,
+			wantException:       false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCrawler(utils.NewTestLogger(), tt.fields.crawlDepth, tt.fields.excludedFolders, tt.fields.excludedExtensions, tt.fields.excludedLastModifiedBelow, tt.fields.excludedFileSizeBelow, tt.fields.onlyAccessibleFiles, tt.fields.threads, tt.fields.deadline)
+			c := NewCrawler(utils.NewTestLogger(), tt.fields.crawlDepth, tt.fields.excludedFolders, tt.fields.excludedExtensions, tt.fields.excludedLastModifiedBelow, tt.fields.excludedFileSizeBelow, tt.fields.onlyAccessibleFiles, tt.fields.threads, tt.fields.context)
 			got := c.Crawl(tt.args.startInfo)
 			if len(got.Data) != len(tt.wantFileInfos) {
-				t.Errorf("CrawlPath() = %v, \n want (Files)%v", spew.Sdump(got.Data), spew.Sdump(tt.wantFileInfos))
+				t.Errorf("Crawler.Crawl() data length = '%v', want = '%v'", len(got.Data), len(tt.wantFileInfos))
 				return
 			}
 
@@ -363,38 +402,46 @@ func TestCrawler_Crawl(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(gotFiles, tt.wantFileInfos) {
-				t.Errorf("CrawlPath() = \n%v,\nwant (Files)\n%v", gotFiles, tt.wantFileInfos)
+				t.Errorf("Crawler.Crawl() files = '%v', want = '%v'", gotFiles, tt.wantFileInfos)
 			}
 			if !reflect.DeepEqual(got.FoldersReadable, tt.wantFoldersReadable) {
-				t.Errorf("CrawlPath() = %v, want %v (FoldersReadable)", got.FoldersReadable, tt.wantFoldersReadable)
+				t.Errorf("Crawler.Crawl() foldersReadable = '%v', want = '%v'", got.FoldersReadable, tt.wantFoldersReadable)
 			}
 			if !reflect.DeepEqual(got.FilesReadable, tt.wantFilesReadable) {
-				t.Errorf("CrawlPath() = %v, want %v (FilesReadable)", got.FilesReadable, tt.wantFilesReadable)
+				t.Errorf("Crawler.Crawl() filesReadable = '%v', want = '%v'", got.FilesReadable, tt.wantFilesReadable)
 			}
 			if !reflect.DeepEqual(got.FilesWritable, tt.wantFilesWritable) {
-				t.Errorf("CrawlPath() = %v, want %v (FilesWritable)", got.FilesWritable, tt.wantFilesWritable)
+				t.Errorf("Crawler.Crawl() filesWritable = '%v', want = '%v'", got.FilesWritable, tt.wantFilesWritable)
 			}
 			if !reflect.DeepEqual(got.Status, tt.wantStatus) {
-				t.Errorf("CrawlPath() = %v, want %v (Status)", got.Status, tt.wantStatus)
+				t.Errorf("Crawler.Crawl() status = '%v', want = '%v'", got.Status, tt.wantStatus)
 			}
 			if !reflect.DeepEqual(got.Exception, tt.wantException) {
-				t.Errorf("CrawlPath() = %v, want %v (Exception)", got.Exception, tt.wantException)
+				t.Errorf("Crawler.Crawl() exception = '%v', want = '%v'", got.Exception, tt.wantException)
 			}
 		})
 	}
 }
 
+// TestCrawler_processFile verifies that processFile correctly extracts metadata and content from individual files.
 func TestCrawler_processFile(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
+	testSettings := _test.GetSettings()
 
 	// Prepare test variables
 	crawlFolder := filepath.Join(testSettings.PathDataDir, "filecrawler")
+
+	// Create a temporary symlink in the test working directory for the symlink-file test case
+	symlinkPath, errSymAbs := filepath.Abs("symlink-to-file.txt")
+	if errSymAbs != nil {
+		t.Fatalf("TestCrawler_processFile could not resolve symlink path: '%v'", errSymAbs)
+	}
+	_ = os.Remove(symlinkPath)
+	if errSym := os.Symlink(filepath.Join(crawlFolder, "file_with_content.txt"), symlinkPath); errSym != nil {
+		t.Fatalf("TestCrawler_processFile could not create symlink: '%v'", errSym)
+	}
+	defer func() { _ = os.Remove(symlinkPath) }()
 
 	// Prepare and run test cases
 	type args struct {
@@ -416,15 +463,16 @@ func TestCrawler_processFile(t *testing.T) {
 		wantResult *File
 		wantTasks  []*task
 	}{
-		{"average case",
-			fields{
+		{
+			name: "average-case",
+			fields: fields{
 				excludedExtensions:        map[string]struct{}{},
 				excludedLastModifiedBelow: time.Date(2007, 12, 22, 11, 25, 44, 5876554000, time.Local),
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       true,
 			},
-			args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
-			&File{
+			args: args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
+			wantResult: &File{
 				Share:           "TestShare",
 				Path:            filepath.Join(crawlFolder, "file_with_content.txt"),
 				Name:            "file_with_content.txt",
@@ -441,45 +489,87 @@ func TestCrawler_processFile(t *testing.T) {
 				NfsRestrictions: nil,
 				Properties:      []string{},
 			},
-			nil,
+			wantTasks: nil,
 		},
-		{"excluded extensions",
-			fields{
+		{
+			name: "excluded-extensions",
+			fields: fields{
 				excludedExtensions:        map[string]struct{}{"txt": {}},
 				excludedLastModifiedBelow: time.Date(2007, 12, 22, 11, 25, 44, 5876554000, time.Local),
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       true,
 			},
-			args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
-			nil,
-			nil,
+			args:       args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
+			wantResult: nil,
+			wantTasks:  nil,
 		},
-		{"excluded last modified",
-			fields{
+		{
+			name: "excluded-last-modified",
+			fields: fields{
 				excludedExtensions:        map[string]struct{}{},
 				excludedLastModifiedBelow: time.Now(),
 				excludedFileSizeBelow:     0,
 				onlyAccessibleFiles:       true,
 			},
-			args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
-			nil,
-			nil,
+			args:       args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
+			wantResult: nil,
+			wantTasks:  nil,
 		},
-		{"excluded file size below",
-			fields{
+		{
+			name: "excluded-file-size-below",
+			fields: fields{
 				excludedExtensions:        map[string]struct{}{},
 				excludedLastModifiedBelow: time.Date(2007, 12, 22, 11, 25, 44, 5876554000, time.Local),
 				excludedFileSizeBelow:     4,
 				onlyAccessibleFiles:       true,
 			},
-			args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
-			nil,
-			nil,
+			args:       args{filepath.Join(crawlFolder, "file_with_content.txt"), "TestShare", false, 2},
+			wantResult: nil,
+			wantTasks:  nil,
+		},
+		{
+			name: "nonexistent-path",
+			fields: fields{
+				excludedExtensions:        map[string]struct{}{},
+				excludedLastModifiedBelow: time.Time{},
+				excludedFileSizeBelow:     0,
+				onlyAccessibleFiles:       false,
+			},
+			args:       args{"/does/not/exist/file.txt", "TestShare", false, 1},
+			wantResult: nil,
+			wantTasks:  nil,
+		},
+		{
+			name: "symlink-file",
+			fields: fields{
+				excludedExtensions:        map[string]struct{}{},
+				excludedLastModifiedBelow: time.Date(2007, 12, 22, 11, 25, 44, 5876554000, time.Local),
+				excludedFileSizeBelow:     0,
+				onlyAccessibleFiles:       false,
+			},
+			args: args{symlinkPath, "TestShare", false, 1},
+			wantResult: &File{
+				Share:           "TestShare",
+				Path:            symlinkPath,
+				Name:            "symlink-to-file.txt",
+				Extension:       "txt",
+				Mime:            "",
+				Readable:        true,
+				Writable:        true,
+				Flags:           "Lrwxrwxrwx",
+				SizeKb:          0,
+				Depth:           1,
+				IsSymlink:       true,
+				IsDfs:           false,
+				NfsRestrictions: nil,
+				Properties:      nil,
+			},
+			wantTasks: nil,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := NewCrawler(utils.NewTestLogger(), 0, nil, tt.fields.excludedExtensions, tt.fields.excludedLastModifiedBelow, tt.fields.excludedFileSizeBelow, tt.fields.onlyAccessibleFiles, 0, time.Time{})
+			c := NewCrawler(utils.NewTestLogger(), 0, nil, tt.fields.excludedExtensions, tt.fields.excludedLastModifiedBelow, tt.fields.excludedFileSizeBelow, tt.fields.onlyAccessibleFiles, 0, context.Background())
 			var chProcessResults = make(chan *processResult)
 			go c.processFile(&task{
 				isFolder:      false,
@@ -496,10 +586,105 @@ func TestCrawler_processFile(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(procRes.data, tt.wantResult) {
-				t.Errorf("SmbCrawler: processFile(): data\n =   %v, \nwant %v", procRes.data, tt.wantResult)
+				t.Errorf("Crawler.processFile() data = '%v', want = '%v'", procRes.data, tt.wantResult)
 			}
 			if !reflect.DeepEqual(procRes.newTasks, tt.wantTasks) {
-				t.Errorf("SmbCrawler: processFile(): newTasks\n =  %v, \nwant %v", spew.Sdump(procRes.newTasks), spew.Sdump(tt.wantTasks))
+				t.Errorf("Crawler.processFile() newTasks = '%v', want = '%v'", procRes.newTasks, tt.wantTasks)
+			}
+		})
+	}
+}
+
+// TestCrawler_Crawl_SymlinkLoop verifies that a self-referential symlink loop terminates via crawlDepth or context deadline and never causes unbounded traversal.
+func TestCrawler_Crawl_SymlinkLoop(t *testing.T) {
+
+	tests := []struct {
+		name            string
+		crawlDepth      int
+		useDeadlineCtx  bool          // when true, build a context.WithTimeout per test run (cannot share across runs)
+		deadline        time.Duration // only meaningful when useDeadlineCtx is true
+		wantStatus      string
+		wantException   bool
+		wantFolders     int
+		wantDataEntries int
+	}{
+		{
+			name:            "symlink-loop",
+			crawlDepth:      5,
+			useDeadlineCtx:  false,
+			wantStatus:      utils.StatusCompleted,
+			wantException:   false,
+			wantFolders:     1, // only the base dir is traversed; the loop entry is a symlink (not a folder)
+			wantDataEntries: 1, // the symlink reported once with IsSymlink=true
+		},
+		{
+			name:            "symlink-loop-deep",
+			crawlDepth:      -1, // unlimited — termination relies on the symlink-not-a-folder guard, deadline is the safety net
+			useDeadlineCtx:  true,
+			deadline:        2 * time.Second,
+			wantStatus:      utils.StatusCompleted,
+			wantException:   false,
+			wantFolders:     1,
+			wantDataEntries: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			// Build a fresh cyclic symlink tree per sub-test under t.TempDir() (auto-cleaned).
+			base := t.TempDir()
+			loop := filepath.Join(base, "loop")
+			if err := os.Symlink(base, loop); err != nil {
+				t.Fatalf("failed to create self-referential symlink %s -> %s: %v", loop, base, err)
+			}
+
+			// Build the context for this sub-test (deadline contexts must not be shared across iterations).
+			ctx := context.Background()
+			if tt.useDeadlineCtx {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(context.Background(), tt.deadline)
+				defer cancel()
+			}
+
+			// Wall-clock guard: even if the crawler loops AND ignores the context (worst-case regression),
+			// fail the test rather than hang the whole `go test` run. 10s is generous vs. the 2s deadline.
+			done := make(chan *Result, 1)
+			go func() {
+				c := NewCrawler(utils.NewTestLogger(), tt.crawlDepth, nil, nil, time.Time{}, 0, false, 1, ctx)
+				done <- c.Crawl(&EntryPoint{
+					Path:    base,
+					Share:   "filecrawler",
+					IsShare: true,
+				})
+			}()
+
+			var got *Result
+			select {
+			case got = <-done:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("Crawl did not terminate within 10s on cyclic symlink %s -> %s (depth=%d) — likely unbounded traversal", loop, base, tt.crawlDepth)
+			}
+
+			if got.Status != tt.wantStatus {
+				t.Errorf("Crawler.Crawl() Status = '%v', want = '%v'", got.Status, tt.wantStatus)
+			}
+			if got.Exception != tt.wantException {
+				t.Errorf("Crawler.Crawl() Exception = '%v', want = '%v'", got.Exception, tt.wantException)
+			}
+			if got.FoldersReadable != tt.wantFolders {
+				t.Errorf("Crawler.Crawl() FoldersReadable = '%v', want = '%v' (Data=%s)", got.FoldersReadable, tt.wantFolders, spew.Sdump(got.Data))
+			}
+			if len(got.Data) != tt.wantDataEntries {
+				t.Errorf("Crawler.Crawl() len(Data) = '%v', want = '%v' (Data=%s)", len(got.Data), tt.wantDataEntries, spew.Sdump(got.Data))
+			}
+			if len(got.Data) >= 1 {
+				if !got.Data[0].IsSymlink {
+					t.Errorf("Crawler.Crawl() Data[0].IsSymlink = '%v', want = '%v' (entry=%v)", got.Data[0].IsSymlink, true, got.Data[0])
+				}
+				if got.Data[0].Path != loop {
+					t.Errorf("Crawler.Crawl() Data[0].Path = '%v', want = '%v'", got.Data[0].Path, loop)
+				}
 			}
 		})
 	}

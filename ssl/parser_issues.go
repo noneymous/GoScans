@@ -12,6 +12,7 @@ package ssl
 
 import (
 	"fmt"
+
 	gosslyze "github.com/noneymous/GoSslyze"
 )
 

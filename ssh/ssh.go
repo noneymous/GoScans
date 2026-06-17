@@ -1,26 +1,29 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package ssh implements a scan module for SSH host fingerprinting and authentication testing.
 package ssh
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/siemens/GoScans/utils"
-	"golang.org/x/crypto/ssh"
 	"io"
 	"net"
 	"strings"
 	"time"
+
+	"github.com/siemens/GoScans/utils"
+	"golang.org/x/crypto/ssh"
 )
 
 const Label = "Ssh"
@@ -74,7 +77,9 @@ type Scanner struct {
 	target      string // Address to be scanned (might be IPv4, IPv6 or hostname)
 	port        int
 	dialTimeout time.Duration
-	deadline    time.Time // Time when the scanner has to abort
+
+	contextInner       context.Context    // Context for the scan, within which the scan should execute. Might optionally wrap an outer context. If outer context is cancelled, inner one should cancel too, but not the other way around.
+	contextInnerCancel context.CancelFunc // Context cancel function of inner context, not impacting optional outer one.
 }
 
 func NewScanner(
@@ -83,6 +88,9 @@ func NewScanner(
 	port int,
 	dialTimeout time.Duration,
 ) (*Scanner, error) {
+
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
 
 	// Check whether input target is valid
 	if !utils.IsValidAddress(target) {
@@ -95,14 +103,24 @@ func NewScanner(
 		time.Time{}, // zero time
 		time.Time{}, // zero time
 		logger,
-		strings.TrimSpace(target),
+		target,
 		port,
 		dialTimeout,
-		time.Time{}, // zero time (no deadline yet set)
+		nil,
+		nil,
 	}
 
 	// Return scan struct
 	return &scan, nil
+}
+
+// SetContext can be used to pass an existing context from outside.
+// If timeout is supplied later when calling Run() the external context and the deadline context will be combined.
+// Once set, the context cannot be changed anymore, because it might have been wrapped internally already.
+func (s *Scanner) SetContext(ctx context.Context) {
+	if s.contextInner == nil {
+		s.contextInner = ctx
+	}
 }
 
 // Run starts scan execution. This must either be executed as a goroutine, or another thread must be active listening
@@ -128,14 +146,29 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 		}
 	}()
 
-	// Set scan started flag and calculate deadline
+	// Set scan started flag
 	s.Started = time.Now()
-	if timeout > 0 {
-		s.deadline = time.Now().Add(timeout)
+
+	// Create initial context
+	contextInner := context.Background()
+
+	// Replace context with external one if set
+	if s.contextInner != nil {
+		contextInner = s.contextInner
 	}
-	s.logger.Infof("Started  scan of %s.", s.target)
+
+	// Add timeout to context if desired
+	var contextInnerCancel context.CancelFunc
+	if timeout > 0 {
+		contextInner, contextInnerCancel = context.WithTimeout(contextInner, timeout)
+	}
+
+	// Set context for scan
+	s.contextInner = contextInner
+	s.contextInnerCancel = contextInnerCancel
 
 	// Execute scan logic
+	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
 	res = s.execute()
 
 	// Log scan completion message
@@ -148,6 +181,11 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 }
 
 func (s *Scanner) execute() *Result {
+
+	// Cleanup inner context if set
+	if s.contextInnerCancel != nil {
+		defer s.contextInnerCancel()
+	}
 
 	// The scan first gets the authentication parameters using the golang ssh package functions.
 	// To get the other security parameter we implemented the first message exchange of the ssh handshake.
@@ -177,7 +215,7 @@ func (s *Scanner) execute() *Result {
 	}
 
 	// Check whether scan timeout is reached
-	if utils.DeadlineReached(s.deadline) {
+	if utils.ContextExpired(s.contextInner) {
 		s.logger.Debugf("Scan ran into timeout.")
 		return &Result{
 			results,
@@ -193,7 +231,7 @@ func (s *Scanner) execute() *Result {
 	}
 
 	// Check whether scan timeout is reached
-	if utils.DeadlineReached(s.deadline) {
+	if utils.ContextExpired(s.contextInner) {
 		s.logger.Debugf("Scan ran into timeout.")
 		return &Result{
 			results,
@@ -281,7 +319,7 @@ func (cr keyboardInteractive) challenge(user string, instruction string, questio
 	return make([]string, len(questions)), nil
 }
 
-// We need to define a fake gssapi client in order to let Go test for this authentication method
+// FakeClient is a stub GSSAPI client used to probe for GSSAPI authentication support during SSH scanning.
 type FakeClient struct{}
 
 func (f *FakeClient) InitSecContext(target string, token []byte, isGSSDelegCreds bool) (outputToken []byte, needContinue bool, err error) {

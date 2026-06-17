@@ -1,26 +1,17 @@
-/*
-* GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
-*
-* Copyright (c) Siemens AG, 2016-2025.
-*
-* This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
-* directory or visit <https://opensource.org/licenses/MIT>.
-*
- */
-
-package active_directory
+package ad
 
 import (
 	"fmt"
+	"net"
+	"strings"
+	"time"
+
 	"github.com/go-ldap/ldap/v3"
 	"github.com/go-ldap/ldap/v3/gssapi"
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/iana/flags"
 	"github.com/siemens/GoScans/utils"
-	"net"
-	"strings"
-	"time"
 )
 
 // ldapConnectGssapi establishes an LDAP connection with GSSAPI (Kerberos) authentication

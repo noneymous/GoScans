@@ -1,20 +1,23 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package template provides a reference skeleton for implementing GoScans scan modules.
 package template
 
 import (
+	"context"
 	"fmt"
-	"github.com/siemens/GoScans/utils"
 	"strings"
 	"time"
+
+	"github.com/siemens/GoScans/utils"
 )
 
 const label = "Template"
@@ -40,7 +43,7 @@ func CheckSetup() error {
 	return nil
 }
 
-// TODO adapt type as necessary
+// Result holds the scan output data.
 type Result struct {
 	Data      map[string]string
 	Status    string // Final scan status (success or graceful error). Should be stored along with the scan results.
@@ -49,7 +52,7 @@ type Result struct {
 	// this flag! This flag may additionally come along with a message put into the status attribute.
 }
 
-// TODO adapt parameters as necessary
+// Scanner implements the template scan module.
 type Scanner struct {
 	Label    string
 	Started  time.Time
@@ -58,7 +61,9 @@ type Scanner struct {
 	target   string // Address to be scanned (might be IPv4, IPv6 or hostname)
 	port     int
 	protocol string
-	deadline time.Time // Time when the scanner has to abort
+
+	contextInner       context.Context    // Context for the scan, within which the scan should execute. Might optionally wrap an outer context. If outer context is cancelled, inner one should cancel too, but not the other way around.
+	contextInnerCancel context.CancelFunc // Context cancel function of inner context, not impacting optional outer one.
 }
 
 func NewScanner(
@@ -68,25 +73,44 @@ func NewScanner(
 	protocol string,
 ) (*Scanner, error) {
 
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
+
 	// Check whether input target is valid
 	if !utils.IsValidAddress(target) {
 		return nil, fmt.Errorf("invalid target '%s'", target)
 	}
+
+	// Check whether input protocol is valid
+	if !(protocol == "tcp" || protocol == "udp") {
+		return nil, fmt.Errorf("invalid protocol '%s'", protocol)
+	}
+
 	// TODO validate arguments as necessary
 
 	// Initiate scanner with sanitized input values
 	// TODO adapt parameters and sanitize as required
 	scan := Scanner{
-		Label:    label,
-		logger:   logger,
-		target:   strings.TrimSpace(target),
-		port:     port,
-		protocol: strings.TrimSpace(protocol),
-		deadline: time.Time{},
+		Label:              label,
+		logger:             logger,
+		target:             target,
+		port:               port,
+		protocol:           protocol,
+		contextInner:       nil,
+		contextInnerCancel: nil,
 	}
 
 	// Return scan struct
 	return &scan, nil
+}
+
+// SetContext can be used to pass an existing context from outside.
+// If timeout is supplied later when calling Run() the external context and the deadline context will be combined.
+// Once set, the context cannot be changed anymore, because it might have been wrapped internally already.
+func (s *Scanner) SetContext(ctx context.Context) {
+	if s.contextInner == nil {
+		s.contextInner = ctx
+	}
 }
 
 // Run starts scan execution. This must either be executed as a goroutine, or another thread must be active listening
@@ -112,14 +136,29 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 		}
 	}()
 
-	// Set scan started flag and calculate deadline
+	// Set scan started flag
 	s.Started = time.Now()
-	if timeout > 0 {
-		s.deadline = time.Now().Add(timeout)
+
+	// Create initial context
+	contextInner := context.Background()
+
+	// Replace context with external one if set
+	if s.contextInner != nil {
+		contextInner = s.contextInner
 	}
-	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
+
+	// Add timeout to context if desired
+	var contextInnerCancel context.CancelFunc
+	if timeout > 0 {
+		contextInner, contextInnerCancel = context.WithTimeout(contextInner, timeout)
+	}
+
+	// Set context for scan
+	s.contextInner = contextInner
+	s.contextInnerCancel = contextInnerCancel
 
 	// Execute scan logic
+	s.logger.Infof("Started  scan of %s:%d.", s.target, s.port)
 	res = s.execute()
 
 	// Log scan completion message
@@ -133,6 +172,11 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 
 func (s *Scanner) execute() *Result {
 
+	// Cleanup inner context if set
+	if s.contextInnerCancel != nil {
+		defer s.contextInnerCancel()
+	}
+
 	// Declare variables
 	// TODO adapt type as necessary
 	results := map[string]string{}
@@ -142,7 +186,7 @@ func (s *Scanner) execute() *Result {
 
 	// Check whether scan timeout is reached
 	// TODO regularly check if scan time frame is reached
-	if utils.DeadlineReached(s.deadline) {
+	if utils.ContextExpired(s.contextInner) {
 		s.logger.Debugf("Scan ran into timeout.")
 		return &Result{
 			results,

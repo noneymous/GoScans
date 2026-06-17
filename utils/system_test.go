@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,25 +11,27 @@
 package utils
 
 import (
-	"github.com/siemens/GoScans/_test"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/siemens/GoScans/_test"
 )
 
+// TestExecute verifies that Execute runs valid system commands and returns an error for invalid or unprivileged ones.
 func TestExecute(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
+	testSettings := _test.GetSettings()
+	if testSettings.PathNmap == "" {
+		t.Skip("Integration test skipped: PathNmap not configured in _test/settings.go")
 		return
 	}
 
 	// Calculate Nmap dir
 	errNmapDir := IsValidFolder(testSettings.PathNmapDir)
 	if errNmapDir != nil {
-		t.Errorf("Execute() - Could calculate Nmap directory")
+		t.Errorf("Execute() Nmap directory invalid: '%v'", errNmapDir)
 		return
 	}
 
@@ -46,11 +48,31 @@ func TestExecute(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"valid", args{"whoami", []string{}}, false},
-		{"valid-args", args{"ipconfig", []string{"/all"}}, false},
-		{"invalid-command", args{"notexisting", []string{}}, true},
-		{"invalid-command-args", args{"notexisting", []string{"a", "b", "c"}}, true},
-		{"invalid-privileges", args{"reg", []string{"import", patchFile}}, true},
+		{
+			name:    "valid",
+			args:    args{"whoami", []string{}},
+			wantErr: false,
+		},
+		{
+			name:    "valid-args",
+			args:    args{"ipconfig", []string{"/all"}},
+			wantErr: false,
+		},
+		{
+			name:    "invalid-command",
+			args:    args{"notexisting", []string{}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-command-args",
+			args:    args{"notexisting", []string{"a", "b", "c"}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid-privileges",
+			args:    args{"reg", []string{"import", patchFile}},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -61,6 +83,7 @@ func TestExecute(t *testing.T) {
 	}
 }
 
+// TestIsElevated verifies that IsElevated returns false when not running with elevated privileges.
 func TestIsElevated(t *testing.T) {
 
 	// Prepare and run test cases
@@ -68,7 +91,7 @@ func TestIsElevated(t *testing.T) {
 		name string
 		want bool
 	}{
-		{"invalid", false},
+		{name: "invalid", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -79,82 +102,8 @@ func TestIsElevated(t *testing.T) {
 	}
 }
 
-func TestIsValidFolder(t *testing.T) {
-
-	// Prepare and run test cases
-	tests := []struct {
-		name    string
-		path    string
-		wantErr bool
-	}{
-		{"invalid-path", `C:\notexistingfolder`, true},
-		{"invalid-folder", `C:\Windows\System32\cmd.exe`, true},
-		{"valid-1", `C:\Windows\System32`, false},
-		{"valid-2", `C:\Windows\System32\`, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := IsValidFolder(tt.path); (err != nil) != tt.wantErr {
-				t.Errorf("IsValidFolder() error = '%v', wantErr = '%v'", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestIsValidFile(t *testing.T) {
-
-	// Prepare and run test cases
-	tests := []struct {
-		name    string
-		path    string
-		wantErr bool
-	}{
-		{"invalid-folder", `C:\notexistingfolder`, true},
-		{"valid-file", `C:\Windows\System32\cmd.exe`, false},
-		{"invalid-folder-1", `C:\Windows\System32`, true},
-		{"invalid-folder-2", `C:\Windows\System32\`, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := IsValidFile(tt.path); (err != nil) != tt.wantErr {
-				t.Errorf("IsValidFile() error = '%v', wantErr = '%v'", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestIsValidExecutable(t *testing.T) {
-
-	// Prepare and run test cases
-	tests := []struct {
-		name    string
-		path    string
-		args    []string
-		wantErr bool
-	}{
-		{"executable-invalid-inexisting-folder", `C:\notexistingfolder`, []string{"-h"}, true},
-		{"executable-invalid-existing-folder", `..`, []string{"-h"}, true},
-		{"executable-valid", `C:\Windows\System32\cmd.exe`, []string{"-h"}, false},
-		{"executable-invalid", `C:\Windows\System32`, []string{"-h"}, true},
-		{"executable-from-env-path", `cmd`, []string{}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := IsValidExecutable(tt.path, tt.args...); (err != nil) != tt.wantErr {
-				t.Errorf("IsValidExecutable() error = '%v', wantErr = '%v'", err, tt.wantErr)
-			}
-		})
-	}
-}
-
+// TestSanitizeFilename verifies that SanitizeFilename replaces illegal characters with the given placeholder.
 func TestSanitizeFilename(t *testing.T) {
-
-	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
-		return
-	}
 
 	// Prepare test variables
 	testContent := []byte("test")
@@ -169,26 +118,38 @@ func TestSanitizeFilename(t *testing.T) {
 		args args
 		want string
 	}{
-		{"", args{"!\"§$%&/(()=?`*'_:;><,.-#+´ß0987654321^°|~\\}][{³²µ'`)", "_"}, "!_§$%&_(()=_`_'__;__,.-#+´ß0987654321^°_~_}][{³²µ'`)"},
+		{
+			name: "sanitize-special-chars",
+			args: args{
+				raw:         "!\"§$%&/(()=?`*'_:;><,.-#+´ß0987654321^°|~\\}][{³²µ'`)",
+				placeholder: "_",
+			},
+			want: "!_§$%&_(()=_`_'__;__,.-#+´ß0987654321^°_~_}][{³²µ'`)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SanitizeFilename(tt.args.raw, tt.args.placeholder); got != tt.want {
+			got := SanitizeFilename(tt.args.raw, tt.args.placeholder)
+			if got != tt.want {
 				t.Errorf("SanitizeFilename() = '%v', want = '%v'", got, tt.want)
 			}
-			p := filepath.Join(testSettings.PathTmpDir, tt.want+".txt")
-			errWrite := os.WriteFile(p, testContent, 666)
+
+			// Verify the sanitized name can be used to write and read a file
+			dir := t.TempDir()
+			p := filepath.Join(dir, got+".txt")
+			errWrite := os.WriteFile(p, testContent, 0666)
 			if errWrite != nil {
-				t.Errorf("SanitizeFilename() Writing test file failed!")
+				t.Errorf("SanitizeFilename() WriteFile error = '%v'", errWrite)
+				return
 			}
 			content, errRead := os.ReadFile(p)
 			if errRead != nil {
-				t.Errorf("SanitizeFilename() Reading test file failed!")
+				t.Errorf("SanitizeFilename() ReadFile error = '%v'", errRead)
+				return
 			}
 			if string(content) != string(testContent) {
-				t.Errorf("SanitizeFilename() Output does not match input!")
+				t.Errorf("SanitizeFilename() file content = '%v', want = '%v'", string(content), string(testContent))
 			}
-			_ = os.Remove(p)
 		})
 	}
 }

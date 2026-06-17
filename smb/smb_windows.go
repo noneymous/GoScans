@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,10 +12,6 @@ package smb
 
 import (
 	"fmt"
-	"github.com/siemens/GoScans/filecrawler"
-	"github.com/siemens/GoScans/utils"
-	"github.com/siemens/GoScans/utils/windows_systemcalls"
-	"golang.org/x/sys/windows"
 	"math"
 	"net"
 	"os"
@@ -24,6 +20,11 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"github.com/siemens/GoScans/filecrawler"
+	"github.com/siemens/GoScans/utils"
+	"github.com/siemens/GoScans/utils/windows_systemcalls"
+	"golang.org/x/sys/windows"
 )
 
 // windows constants
@@ -73,7 +74,7 @@ func (s *Scanner) crawl() *filecrawler.Result {
 		int64(s.excludedFileSizeBelow),
 		s.onlyAccessibleFiles,
 		s.threads,
-		s.deadline,
+		s.contextInner,
 	)
 
 	// Enumerate all Shares from the target and abort if any errors occur
@@ -148,7 +149,7 @@ func (s *Scanner) crawl() *filecrawler.Result {
 		result.Data = append(result.Data, shareResult.Data...)
 
 		// Abort if scan deadline was reached
-		if utils.DeadlineReached(s.deadline) {
+		if utils.ContextExpired(s.contextInner) {
 			return result
 		}
 
@@ -241,7 +242,7 @@ func (s *Scanner) crawlShare(
 		shareResult.Data = append(shareResult.Data, result.Data...)
 
 		// Abort if scan deadline was reached
-		if utils.DeadlineReached(s.deadline) {
+		if utils.ContextExpired(s.contextInner) {
 			break
 		}
 	}
@@ -343,30 +344,40 @@ func (s *Scanner) getShares() ([]shareInfo, error) {
 // mountShare mounts a given share
 func (s *Scanner) mountShare(share shareInfo) error {
 
-	// Prepare memory
+	// Encode the share path as a UTF-16 pointer
+	sharePathPtr, errPath := syscall.UTF16PtrFromString(share.Path)
+	if errPath != nil {
+		return errPath
+	}
+
+	// Prepare user and password pointers (remain nil when no credentials are supplied)
 	var userPtr *uint16
 	var passwordPtr *uint16
-	sharePathPtr, err := syscall.UTF16PtrFromString(share.Path)
+
+	// If a user is provided, encode credentials as UTF-16 pointers
+	if s.smbUser != "" {
+		userPtrLocal, errUser := syscall.UTF16PtrFromString(fmt.Sprintf("%s\\%s", s.smbDomain, s.smbUser))
+		if errUser != nil {
+			return errUser
+		}
+		userPtr = userPtrLocal
+
+		passwordPtrLocal, errPass := syscall.UTF16PtrFromString(s.smbPassword)
+		if errPass != nil {
+			return errPass
+		}
+		passwordPtr = passwordPtrLocal
+	}
 
 	// Create "Netresource" with share information
 	var netResource windows_systemcalls.Netresource
 	netResource.Type = ResourcetypeDisk
 	netResource.RemoteName = sharePathPtr
 
-	// If a user is provided, use the specified credentials otherwise use the default credentials of the current
-	// windows account instead (leaves userPtr and passwordPtr as nil)
-	if s.smbUser != "" {
-		userPtr, err = syscall.UTF16PtrFromString(fmt.Sprintf("%s\\%s", s.smbDomain, s.smbUser))
-		passwordPtr, err = syscall.UTF16PtrFromString(s.smbPassword)
-		if err != nil {
-			return err
-		}
-	}
-
 	// Connect share
-	err = windows_systemcalls.WNetAddConnection2(&netResource, passwordPtr, userPtr, 0)
-	if err != nil {
-		return err
+	errConnect := windows_systemcalls.WNetAddConnection2(&netResource, passwordPtr, userPtr, 0)
+	if errConnect != nil {
+		return errConnect
 	}
 
 	// Return nil as everything went fine
@@ -376,11 +387,15 @@ func (s *Scanner) mountShare(share shareInfo) error {
 // unmountShare unmounts a given share
 func (s *Scanner) unmountShare(share shareInfo) error {
 
-	// Unmount share
-	sharePathPtr, err := syscall.UTF16PtrFromString(share.Path)
-	err = windows_systemcalls.WNetCancelConnection2(sharePathPtr, 0, true)
-	if err != nil {
-		return err
+	// Encode the share path as a UTF-16 pointer
+	sharePathPtr, errPath := syscall.UTF16PtrFromString(share.Path)
+	if errPath != nil {
+		return errPath
+	}
+
+	// Disconnect the share
+	if errCancel := windows_systemcalls.WNetCancelConnection2(sharePathPtr, 0, true); errCancel != nil {
+		return errCancel
 	}
 
 	// Return nil as everything went fine
@@ -446,7 +461,7 @@ func (s *Scanner) crawlDfs(
 	err := filepath.Walk(share.Path, func(path string, info os.FileInfo, errWalk error) error {
 
 		// Abort if deadline is reached
-		if utils.DeadlineReached(s.deadline) {
+		if utils.ContextExpired(s.contextInner) {
 			return fmt.Errorf("deadline reached")
 		}
 
@@ -550,9 +565,9 @@ func (s *Scanner) discoverSharesViaDfs(
 
 	// Prepare memory
 	var sharesDiscovered []shareInfo
-	info := (*windows_systemcalls.DFS_INFO_3)(unsafe.Pointer(dfsShareInfoPtr))
-	numberLinks := int(info.NumberOfStorages)
-	pStorage := info.DfsStorageInfo
+	var info = (*windows_systemcalls.DFS_INFO_3)(unsafe.Pointer(dfsShareInfoPtr))
+	var numberLinks = int(info.NumberOfStorages)
+	var pStorage *windows_systemcalls.DFS_STORAGE_INFO
 
 	// Iterate links
 	for i := 0; i < numberLinks; i++ {

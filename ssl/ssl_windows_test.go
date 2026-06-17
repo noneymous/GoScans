@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2021.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -11,17 +11,19 @@
 package ssl
 
 import (
+	"testing"
+
 	"github.com/siemens/GoScans/_test"
 	"github.com/siemens/GoScans/utils"
-	"testing"
 )
 
+// Test_NewScanner verifies that NewScanner returns no error for a valid SSLyze path and an error for an invalid one.
 func Test_NewScanner(t *testing.T) {
 
 	// Retrieve test settings
-	testSettings, errSettings := _test.GetSettings()
-	if errSettings != nil {
-		t.Errorf("Invalid test settings: %s", errSettings)
+	testSettings := _test.GetSettings()
+	if testSettings.PathSslyze == "" {
+		t.Skip("Integration test skipped: PathSslyze not configured in _test/settings.go")
 		return
 	}
 
@@ -41,8 +43,28 @@ func Test_NewScanner(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"valid", args{"sub.domain.tld", 443, nil, testSettings.PathSslyze, ""}, false},
-		{"invalid-pathSslyze", args{"sub.domain.tld", 443, nil, "xxx", ""}, true},
+		{
+			name: "valid",
+			args: args{
+				target:           "sub.domain.tld",
+				port:             443,
+				vhosts:           nil,
+				sslyzePath:       testSettings.PathSslyze,
+				customTruststore: "",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid-path-sslyze",
+			args: args{
+				target:           "sub.domain.tld",
+				port:             443,
+				vhosts:           nil,
+				sslyzePath:       "xxx",
+				customTruststore: "",
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

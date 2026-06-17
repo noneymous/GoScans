@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Takes the stacktrace from stack and formats it in a nicely indented way (starting with newline):
+// StacktraceIndented takes the stacktrace from stack and formats it in a nicely indented way (starting with newline):
 // 	Stacktrace:
 //		| goroutine 2775398 [running]:
 //		| go-scans/utils.(*Requester).Get(0xc001511810, 0xc001e39740, 0x2a, 0xc0001b2460, 0x20, 0x0, 0xe, 0xc0003063a0, 0xc, 0x0, ...)

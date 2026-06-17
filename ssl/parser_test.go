@@ -1,7 +1,7 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
@@ -12,13 +12,15 @@ package ssl
 
 import (
 	"encoding/base64"
-	"github.com/noneymous/GoSslyze"
-	"github.com/siemens/GoScans/utils"
 	"reflect"
 	"strings"
 	"testing"
+
+	gosslyze "github.com/noneymous/GoSslyze"
+	"github.com/siemens/GoScans/utils"
 )
 
+// TestGetStringOids verifies that parseEntity extracts the expected OID strings and common name from certificate entities.
 func TestGetStringOids(t *testing.T) {
 
 	// Prepare test variables
@@ -82,21 +84,91 @@ func TestGetStringOids(t *testing.T) {
 		wantCn  string
 		wantOid []string
 	}{
-		{"common-name-only", args{gosslyze.Entity{Attributes: name, RfcString: nameStr}}, "Company Issuing CA Intranet Server 2017", []string{"CommonName: Company Issuing CA Intranet Server 2017"}},
-		{"country-only", args{gosslyze.Entity{Attributes: country, RfcString: countryStr}}, "", []string{"Country: Spain"}},
-		{"organization-only", args{gosslyze.Entity{Attributes: orga, RfcString: orgaStr}}, "", []string{"Organization: Company"}},
-		{"organizational-unit-only", args{gosslyze.Entity{Attributes: orgaUnit, RfcString: orgaUnitStr}}, "", []string{"OrganizationalUnit: Company Trust Center"}},
-		{"locality-only", args{gosslyze.Entity{Attributes: locality, RfcString: localityStr}}, "", []string{"Locality: Muenchen"}},
-		{"province-only", args{gosslyze.Entity{Attributes: province, RfcString: provinceStr}}, "", []string{"Province: Bayern"}},
-		{"street-address-only", args{gosslyze.Entity{Attributes: street, RfcString: streetStr}}, "", []string{"StreetAddress: Somestr. 8"}},
-		{"postal-code-only", args{gosslyze.Entity{Attributes: postal, RfcString: postalStr}}, "", []string{"PostalCode: 54321"}},
-		{"serial-number-only", args{gosslyze.Entity{Attributes: serial, RfcString: serialStr}}, "", []string{"SerialNumber: 007"}},
-		{"all", args{gosslyze.Entity{Attributes: &all, RfcString: allStr}}, "Company Issuing CA Intranet Server 2017", []string{"CommonName: Company Issuing CA Intranet Server 2017", "Country: Spain", "Organization: Company", "OrganizationalUnit: Company Trust Center", "Locality: Muenchen", "Province: Bayern", "StreetAddress: Somestr. 8", "PostalCode: 54321", "SerialNumber: 007"}},
+		{
+			name:    "common-name-only",
+			args:    args{entity: gosslyze.Entity{Attributes: name, RfcString: nameStr}},
+			wantCn:  "Company Issuing CA Intranet Server 2017",
+			wantOid: []string{"CommonName: Company Issuing CA Intranet Server 2017"},
+		},
+		{
+			name:    "country-only",
+			args:    args{entity: gosslyze.Entity{Attributes: country, RfcString: countryStr}},
+			wantCn:  "",
+			wantOid: []string{"Country: Spain"},
+		},
+		{
+			name:    "organization-only",
+			args:    args{entity: gosslyze.Entity{Attributes: orga, RfcString: orgaStr}},
+			wantCn:  "",
+			wantOid: []string{"Organization: Company"},
+		},
+		{
+			name:    "organizational-unit-only",
+			args:    args{entity: gosslyze.Entity{Attributes: orgaUnit, RfcString: orgaUnitStr}},
+			wantCn:  "",
+			wantOid: []string{"OrganizationalUnit: Company Trust Center"},
+		},
+		{
+			name:    "locality-only",
+			args:    args{entity: gosslyze.Entity{Attributes: locality, RfcString: localityStr}},
+			wantCn:  "",
+			wantOid: []string{"Locality: Muenchen"},
+		},
+		{
+			name:    "province-only",
+			args:    args{entity: gosslyze.Entity{Attributes: province, RfcString: provinceStr}},
+			wantCn:  "",
+			wantOid: []string{"Province: Bayern"},
+		},
+		{
+			name:    "street-address-only",
+			args:    args{entity: gosslyze.Entity{Attributes: street, RfcString: streetStr}},
+			wantCn:  "",
+			wantOid: []string{"StreetAddress: Somestr. 8"},
+		},
+		{
+			name:    "postal-code-only",
+			args:    args{entity: gosslyze.Entity{Attributes: postal, RfcString: postalStr}},
+			wantCn:  "",
+			wantOid: []string{"PostalCode: 54321"},
+		},
+		{
+			name:    "serial-number-only",
+			args:    args{entity: gosslyze.Entity{Attributes: serial, RfcString: serialStr}},
+			wantCn:  "",
+			wantOid: []string{"SerialNumber: 007"},
+		},
+		{
+			name:    "all",
+			args:    args{entity: gosslyze.Entity{Attributes: &all, RfcString: allStr}},
+			wantCn:  "Company Issuing CA Intranet Server 2017",
+			wantOid: []string{"CommonName: Company Issuing CA Intranet Server 2017", "Country: Spain", "Organization: Company", "OrganizationalUnit: Company Trust Center", "Locality: Muenchen", "Province: Bayern", "StreetAddress: Somestr. 8", "PostalCode: 54321", "SerialNumber: 007"},
+		},
 
-		{"error-empty", args{gosslyze.Entity{Attributes: orga, RfcString: orgaStr}}, "", []string{"Organization: Company"}},
-		{"nil-attributes", args{gosslyze.Entity{Attributes: nil, RfcString: empty}}, "", []string{}},
-		{"no-attributes", args{gosslyze.Entity{Attributes: &[]gosslyze.Attribute{}, RfcString: empty}}, "", []string{}},
-		{"all-nil", args{gosslyze.Entity{Attributes: nil, RfcString: empty}}, "", []string{}},
+		{
+			name:    "error-empty",
+			args:    args{entity: gosslyze.Entity{Attributes: orga, RfcString: orgaStr}},
+			wantCn:  "",
+			wantOid: []string{"Organization: Company"},
+		},
+		{
+			name:    "nil-attributes",
+			args:    args{entity: gosslyze.Entity{Attributes: nil, RfcString: empty}},
+			wantCn:  "",
+			wantOid: []string{},
+		},
+		{
+			name:    "no-attributes",
+			args:    args{entity: gosslyze.Entity{Attributes: &[]gosslyze.Attribute{}, RfcString: empty}},
+			wantCn:  "",
+			wantOid: []string{},
+		},
+		{
+			name:    "all-nil",
+			args:    args{entity: gosslyze.Entity{Attributes: nil, RfcString: empty}},
+			wantCn:  "",
+			wantOid: []string{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -116,6 +188,7 @@ func TestGetStringOids(t *testing.T) {
 	}
 }
 
+// Test_parseEphemeralKeyInfo verifies that parseEphemeralKeyInfo returns the correct key size, security bits, and extras for each key type.
 func Test_parseEphemeralKeyInfo(t *testing.T) {
 
 	// Prepare test variables
@@ -200,12 +273,48 @@ func Test_parseEphemeralKeyInfo(t *testing.T) {
 		want1 int
 		want2 []string
 	}{
-		{"base-info", args{&base}, 256, 0, baseExtrasRes},
-		{"ecdh-info", args{&ecdh}, 256, 128, ecdhExtrasRes},
-		{"nist-ecdh-info", args{&nist}, 256, 128, nistExtrasRes},
-		{"nist-ecdh-info", args{&dh}, 512, 63, dhExtrasRes},
-		{"error-incorrect interface", args{&incorrectStruct{Asdf: 2}}, 0, 0, []string{}},
-		{"error-interface-non-pointer", args{dh}, 0, 0, []string{}},
+		{
+			name:  "base-info",
+			args:  args{info: &base},
+			want:  256,
+			want1: 0,
+			want2: baseExtrasRes,
+		},
+		{
+			name:  "ecdh-info",
+			args:  args{info: &ecdh},
+			want:  256,
+			want1: 128,
+			want2: ecdhExtrasRes,
+		},
+		{
+			name:  "nist-ecdh-info",
+			args:  args{info: &nist},
+			want:  256,
+			want1: 128,
+			want2: nistExtrasRes,
+		},
+		{
+			name:  "nist-dh-info",
+			args:  args{info: &dh},
+			want:  512,
+			want1: 63,
+			want2: dhExtrasRes,
+		},
+		{
+			name:  "error-incorrect-interface",
+			args:  args{info: &incorrectStruct{Asdf: 2}},
+			want:  0,
+			want1: 0,
+			want2: []string{},
+		},
+		{
+			name:  "error-interface-non-pointer",
+			args:  args{info: dh},
+			want:  0,
+			want1: 0,
+			want2: []string{},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -223,6 +332,7 @@ func Test_parseEphemeralKeyInfo(t *testing.T) {
 	}
 }
 
+// TestGnfsComplexity verifies that gnfsComplexity returns accurate security bit estimates for standard key sizes.
 func TestGnfsComplexity(t *testing.T) {
 
 	tests := []struct {
@@ -232,25 +342,25 @@ func TestGnfsComplexity(t *testing.T) {
 		epsilon        float64
 		wantErr        error
 	}{
-		{"512", 512, 63.929344, 0.01, nil},
-		{"1024", 1024, 86.7661192, 0.01, nil},
-		{"2048", 2048, 116.883813, 0.01, nil},
-		{"3072", 3072, 138.736281, 0.01, nil},
-		{"4096", 4096, 156.496953, 0.01, nil},
-		{"7680", 7680, 203.018736, 0.01, nil},
-		{"8192", 8192, 208.472486, 0.01, nil},
-		{"15360", 15360, 269.384773, 0.01, nil},
-		{"16384", 16384, 276.518407, 0.01, nil},
+		{name: "512", keySize: 512, expectedResult: 63.929344, epsilon: 0.01, wantErr: nil},
+		{name: "1024", keySize: 1024, expectedResult: 86.7661192, epsilon: 0.01, wantErr: nil},
+		{name: "2048", keySize: 2048, expectedResult: 116.883813, epsilon: 0.01, wantErr: nil},
+		{name: "3072", keySize: 3072, expectedResult: 138.736281, epsilon: 0.01, wantErr: nil},
+		{name: "4096", keySize: 4096, expectedResult: 156.496953, epsilon: 0.01, wantErr: nil},
+		{name: "7680", keySize: 7680, expectedResult: 203.018736, epsilon: 0.01, wantErr: nil},
+		{name: "8192", keySize: 8192, expectedResult: 208.472486, epsilon: 0.01, wantErr: nil},
+		{name: "15360", keySize: 15360, expectedResult: 269.384773, epsilon: 0.01, wantErr: nil},
+		{name: "16384", keySize: 16384, expectedResult: 276.518407, epsilon: 0.01, wantErr: nil},
 
-		{"500", 500, 63.2550403, 0.01, nil},
-		{"1000", 1000, 85.8754464, 0.01, nil},
-		{"2000", 2000, 115.7106783, 0.01, nil},
-		{"3100", 3100, 139.2663292, 0.01, nil},
-		{"4100", 4100, 156.5606913, 0.01, nil},
-		{"7700", 7700, 203.2358751, 0.01, nil},
-		{"8200", 8200, 208.5560244, 0.01, nil},
-		{"15400", 15400, 269.6688214, 0.01, nil},
-		{"16400", 16400, 276.6276667, 0.01, nil},
+		{name: "500", keySize: 500, expectedResult: 63.2550403, epsilon: 0.01, wantErr: nil},
+		{name: "1000", keySize: 1000, expectedResult: 85.8754464, epsilon: 0.01, wantErr: nil},
+		{name: "2000", keySize: 2000, expectedResult: 115.7106783, epsilon: 0.01, wantErr: nil},
+		{name: "3100", keySize: 3100, expectedResult: 139.2663292, epsilon: 0.01, wantErr: nil},
+		{name: "4100", keySize: 4100, expectedResult: 156.5606913, epsilon: 0.01, wantErr: nil},
+		{name: "7700", keySize: 7700, expectedResult: 203.2358751, epsilon: 0.01, wantErr: nil},
+		{name: "8200", keySize: 8200, expectedResult: 208.5560244, epsilon: 0.01, wantErr: nil},
+		{name: "15400", keySize: 15400, expectedResult: 269.6688214, epsilon: 0.01, wantErr: nil},
+		{name: "16400", keySize: 16400, expectedResult: 276.6276667, epsilon: 0.01, wantErr: nil},
 	}
 
 	for _, tt := range tests {

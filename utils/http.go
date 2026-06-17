@@ -13,9 +13,6 @@ package utils
 import (
 	"bytes"
 	"fmt"
-	"github.com/Azure/go-ntlmssp"
-	"golang.org/x/net/html"
-	"golang.org/x/net/html/charset"
 	"io"
 	"net"
 	"net/http"
@@ -25,6 +22,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Azure/go-ntlmssp"
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/charset"
 )
 
 const (
@@ -194,7 +195,7 @@ func (r *Requester) Get(url_ string, vhost string) (resp *http.Response, redirec
 					u, errParse := req.URL.Parse(nextUrl)
 					if errParse != nil {
 						return nil, redirects, auth, fmt.Errorf(
-							"failed to parse Location header %q: %v", nextUrl, errParse)
+							"could not parse Location header %q: %v", nextUrl, errParse)
 					}
 					nextUrl = u.String()
 					vhostToUse = req.Host
@@ -608,7 +609,7 @@ func SameEndpoint(url *url.URL, endpointIp string, endpointPort int) bool {
 	if endpointIp != "" {
 
 		// Resolve URL's IP
-		ips, err := net.LookupIP(host)
+		ips, err := dnsLookupIp(host)
 		if err != nil {
 			return false
 		}

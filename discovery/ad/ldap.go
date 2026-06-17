@@ -1,23 +1,24 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2023.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
-package active_directory
+package ad
 
 import (
 	"fmt"
-	"github.com/go-ldap/ldap/v3"
-	"github.com/siemens/GoScans/utils"
 	"net"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-ldap/ldap/v3"
+	"github.com/siemens/GoScans/utils"
 )
 
 // LdapQuery queries the given Active Directory service with explicit authentication and returns a pointer to

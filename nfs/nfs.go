@@ -1,22 +1,25 @@
 /*
 * GoScans, a collection of network scan modules for infrastructure discovery and information gathering.
 *
-* Copyright (c) Siemens AG, 2016-2025.
+* Copyright (c) Siemens AG, 2016-2026.
 *
 * This work is licensed under the terms of the MIT license. For a copy, see the LICENSE file in the top-level
 * directory or visit <https://opensource.org/licenses/MIT>.
 *
  */
 
+// Package nfs implements a scan module for discovering and crawling NFS shares.
 package nfs
 
 import (
+	"context"
 	"fmt"
-	"github.com/siemens/GoScans/filecrawler"
-	"github.com/siemens/GoScans/utils"
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/siemens/GoScans/filecrawler"
+	"github.com/siemens/GoScans/utils"
 )
 
 const Label = "Nfs"
@@ -65,9 +68,11 @@ type Scanner struct {
 	excludedExtensions        map[string]struct{}
 	excludedLastModifiedBelow time.Time
 	excludedFileSizeBelow     int
-	onlyAccessibleFiles       bool      // If true then the scanner only returns files which are readable or writeable
-	deadline                  time.Time // Time when the scanner has to abort
+	onlyAccessibleFiles       bool // If true then the scanner only returns files which are readable or writeable
 	mountTimeout              time.Duration
+
+	contextInner       context.Context    // Context for the scan, within which the scan should execute. Might optionally wrap an outer context. If outer context is cancelled, inner one should cancel too, but not the other way around.
+	contextInnerCancel context.CancelFunc // Context cancel function of inner context, not impacting optional outer one.
 }
 
 type nfsExport struct {
@@ -89,13 +94,19 @@ func NewScanner(
 	mountTimeout time.Duration, // Acceptable values are 0.8sec, 0.9sec and any value in the range 1-60sec
 ) (*Scanner, error) {
 
+	// Sanitize target before validation so leading/trailing whitespace does not cause false rejects
+	target = strings.TrimSpace(target)
+
 	// Check whether input target is valid
 	if !utils.IsValidAddress(target) {
 		return nil, fmt.Errorf("invalid target '%s'", target)
 	}
 
 	// On Linux, a base folder needs to be created
-	prepareMountBase()
+	errMountBase := prepareMountBase()
+	if errMountBase != nil {
+		return nil, errMountBase
+	}
 
 	// Define function to translate a slice into a map, because looking up values within a map is more efficient and
 	// will also get rid of duplicates.
@@ -120,7 +131,7 @@ func NewScanner(
 		time.Time{}, // zero time
 		time.Time{}, // zero time
 		logger,
-		strings.TrimSpace(target),
+		target,
 		crawlDepth,
 		threads,
 		toMap(utils.TrimToLower(excludedShares)),
@@ -129,12 +140,22 @@ func NewScanner(
 		excludedLastModifiedBelow,
 		excludedFileSizeBelow,
 		onlyAccessibleFiles,
-		time.Time{}, // zero time (no deadline yet set)
 		mountTimeout,
+		nil,
+		nil,
 	}
 
 	// Return scan struct
 	return &scan, nil
+}
+
+// SetContext can be used to pass an existing context from outside.
+// If timeout is supplied later when calling Run() the external context and the deadline context will be combined.
+// Once set, the context cannot be changed anymore, because it might have been wrapped internally already.
+func (s *Scanner) SetContext(ctx context.Context) {
+	if s.contextInner == nil {
+		s.contextInner = ctx
+	}
 }
 
 // Run starts scan execution. This must either be executed as a goroutine, or another thread must be active listening
@@ -165,14 +186,29 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 		}
 	}()
 
-	// Set scan started flag and calculate deadline
+	// Set scan started flag
 	s.Started = time.Now()
-	if timeout > 0 {
-		s.deadline = time.Now().Add(timeout)
+
+	// Create initial context
+	contextInner := context.Background()
+
+	// Replace context with external one if set
+	if s.contextInner != nil {
+		contextInner = s.contextInner
 	}
-	s.logger.Infof("Started  scan of %s.", s.target)
+
+	// Add timeout to context if desired
+	var contextInnerCancel context.CancelFunc
+	if timeout > 0 {
+		contextInner, contextInnerCancel = context.WithTimeout(contextInner, timeout)
+	}
+
+	// Set context for scan
+	s.contextInner = contextInner
+	s.contextInnerCancel = contextInnerCancel
 
 	// Execute scan logic
+	s.logger.Infof("Started  scan of %s.", s.target)
 	res = s.execute()
 
 	// Log scan completion message
@@ -185,6 +221,11 @@ func (s *Scanner) Run(timeout time.Duration) (res *Result) {
 }
 
 func (s *Scanner) execute() *Result {
+
+	// Cleanup inner context if set
+	if s.contextInnerCancel != nil {
+		defer s.contextInnerCancel()
+	}
 
 	// Log start
 	s.logger.Debugf("Crawling '%s'.", s.target)
@@ -201,7 +242,7 @@ func (s *Scanner) execute() *Result {
 	)
 
 	// Check whether scan timeout is reached (Timeout status already set)
-	if utils.DeadlineReached(s.deadline) {
+	if utils.ContextExpired(s.contextInner) {
 		s.logger.Debugf("Scan ran into timeout.")
 		return &Result{
 			filecrawler.Result{
@@ -247,7 +288,7 @@ func (s *Scanner) crawl() *filecrawler.Result {
 		int64(s.excludedFileSizeBelow),
 		s.onlyAccessibleFiles,
 		s.threads,
-		s.deadline,
+		s.contextInner,
 	)
 
 	// Enumerate all Shares from the target and abort if any errors occur
@@ -260,7 +301,7 @@ func (s *Scanner) crawl() *filecrawler.Result {
 	for _, export := range exports {
 
 		// Abort if scan deadline was reached
-		if utils.DeadlineReached(s.deadline) {
+		if utils.ContextExpired(s.contextInner) {
 			return result
 		}
 
@@ -407,11 +448,10 @@ func (s *Scanner) getExports() []nfsExport {
 // unmountExport unmounts the export at the mount point
 func (s *Scanner) unmountExport(mountPoint string) error {
 
-	// Unmount export
-	cmd := fmt.Sprintf("%s umount %s %s", adminRights, unmountArgs, mountPoint)
-	out, err := exec.Command(shellToUse, shellArg, cmd).CombinedOutput()
+	// Unmount export using argument array to avoid shell interpretation of the mount point path
+	out, err := execCmd("umount", append(strings.Fields(unmountArgs), mountPoint)...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf(string(out))
+		return fmt.Errorf("%s", out)
 	}
 
 	// Return nil as unmounting succeeded
@@ -426,10 +466,9 @@ func (s *Scanner) getExportsMounted() (map[string][]string, error) {
 	exports := make(map[string][]string)
 
 	// Run command for mounted export enumeration
-	cmd := fmt.Sprintf("%s showmount -a %s", adminRights, s.target)
-	out, err := exec.Command(shellToUse, shellArg, cmd).CombinedOutput()
+	out, err := execCmd("showmount", "-a", s.target).CombinedOutput()
 	if err != nil {
-		return exports, fmt.Errorf(string(out))
+		return exports, fmt.Errorf("%s", out)
 	}
 
 	// Split output to single lines
@@ -471,10 +510,9 @@ func (s *Scanner) getExportsV3() (map[string][]string, error) {
 	exports := make(map[string][]string)
 
 	// Run command for export enumeration
-	cmd := fmt.Sprintf("%s showmount -e %s", adminRights, s.target)
-	out, err := exec.Command(shellToUse, shellArg, cmd).CombinedOutput()
+	out, err := execCmd("showmount", "-e", s.target).CombinedOutput()
 	if err != nil {
-		return exports, fmt.Errorf(string(out))
+		return exports, fmt.Errorf("%s", out)
 	}
 
 	// Convert the output to single lines, remove unnecessary lines and merge lines which belong together
@@ -503,7 +541,7 @@ func (s *Scanner) getExportsV3() (map[string][]string, error) {
 // /vol1/export 192.xxx.xxx.xxx, 192.xxx.xxx.xxx, 192.xxx.xxx.xxx, 192.xxx.xxx.xxx
 func (s *Scanner) sanitizeShowmountOutput(outStr string) []string {
 
-	// Initialise result data
+	// Initialize result data
 	var resultLines []string
 
 	// Split the lines
@@ -539,7 +577,7 @@ func (s *Scanner) sanitizeShowmountOutput(outStr string) []string {
 
 		// Check for strange lines: If it is a continuation line at the beginning then log and append this as its
 		// own line
-		if resultLines == nil || len(resultLines) < 1 {
+		if len(resultLines) < 1 {
 			resultLines = append(resultLines, line)
 			s.logger.Errorf("Unexpected output of 'showmount -e' command: %s", line)
 			continue
@@ -598,4 +636,18 @@ func (s *Scanner) extractLine(line string) (string, []string) {
 		allowedHosts = append(allowedHosts, strings.Trim(host, ", "))
 	}
 	return exportName, allowedHosts
+}
+
+// execCmd builds an exec.Cmd that optionally prepends adminRights (e.g. "sudo") without invoking a shell,
+// preventing command injection via untrusted arguments such as NFS export names
+func execCmd(program string, args ...string) *exec.Cmd {
+
+	// Prepend admin rights command (e.g. sudo on Linux) if configured for the platform
+	if adminRights != "" {
+		args = append([]string{program}, args...)
+		program = adminRights
+	}
+
+	// Return command without shell interpretation
+	return exec.Command(program, args...)
 }
